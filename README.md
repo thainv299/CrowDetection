@@ -135,3 +135,5 @@ crowd_threshold = 20        # Số người tối đa trong ROI
 ```
 
 Vượt ngưỡng → hiển thị **"Đông đúc"** màu đỏ.
+## Authors
+GitHub: [thainv299](https://github.com/thainv299)
