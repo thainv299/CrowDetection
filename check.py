@@ -1,8 +1,8 @@
 import cv2
 import os
 
-img_path = "Dataset/archive/images/train/dieu_0061.png" 
-txt_path = "Dataset/archive/labels/train/dieu_0061.txt"
+img_path = "Dataset/archive/images/train/dieu_0085.png" 
+txt_path = "Dataset/archive/labels/train/dieu_0085.txt"
 
 class_names = {0: "Nguoi", 1: "Xe_dap", 2: "O_to", 3: "Xe_may", 4: "Bien_so"}
 
