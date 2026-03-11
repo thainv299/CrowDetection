@@ -242,7 +242,10 @@ class App:
 
             congestion_threshold = 10
             crowd_threshold = 20
+            speed_threshold = 10
 
+            track_history = {}
+            
             prev_time = time.time()
             fps_frame_count = 0
             current_fps = 0.0
@@ -256,6 +259,7 @@ class App:
                 if not ret:
                     break
 
+                current_time = time.time()
                 frame_count += 1
                 if frame_count % 2 == 0 and last_results is not None:
                     # Frame chẵn: bỏ qua detect, dùng kết quả frame trước
@@ -264,10 +268,12 @@ class App:
                     # Frame lẻ: detect bình thường
                     results = self.model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
                     last_results = results
-
+                
                 vehicle_count = 0
                 people_count = 0
 
+                current_ids_in_roi = []
+                
                 for r in results:
                     for box in r.boxes:
 
@@ -293,9 +299,19 @@ class App:
                                     people_count += 1
                                 else:
                                     vehicle_count += 1
-
+                                # --- LOGIC LƯU VẾT CHO CÁC PHƯƠNG TIỆN ---
+                                    if track_id != -1:
+                                        current_ids_in_roi.append(track_id)
+                                        if track_id not in track_history:
+                                            track_history[track_id] = []
+                                        
+                                        # Thêm tọa độ và thời gian hiện tại vào lịch sử
+                                        track_history[track_id].append((cx, cy, current_time))
+                                        
+                                        # Giới hạn lịch sử: Chỉ giữ lại dữ liệu trong 2 giây gần nhất để tính toán cho nhẹ
+                                        track_history[track_id] = [p for p in track_history[track_id] if current_time - p[2] <= 2.0]
+                                        
                                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
                                 text = f"ID:{track_id} {label}"
                                 cv2.putText(frame, text,
                                             (x1, y1 - 10),
@@ -303,32 +319,61 @@ class App:
                                             0.6,
                                             (0, 255, 0),
                                             2)
-
                                 cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
+                # --- LOGIC TÍNH TOÁN VẬN TỐC TRUNG BÌNH ---
+                total_speed = 0.0
+                valid_speed_count = 0
 
-                # Vẽ ROI
-                cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
+                for tid in list(track_history.keys()):
+                    # Xóa các xe đã đi ra khỏi ROI (không xuất hiện trong current_ids_in_roi)
+                    if tid not in current_ids_in_roi:
+                        # Cho phép trễ 1 giây để tránh bị mất ID tạm thời do che khuất
+                        if len(track_history[tid]) > 0 and (current_time - track_history[tid][-1][2]) > 1.0:
+                            del track_history[tid]
+                        continue
 
-                cv2.putText(frame, "Bam ESC de thoat", (30, 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                    points = track_history[tid]
+                    # Cần ít nhất 2 điểm và khoảng thời gian đủ dài (> 0.2s) để tính vận tốc chính xác
+                    if len(points) >= 2:
+                        p_old = points[0]
+                        p_new = points[-1]
+                        dt = p_new[2] - p_old[2]
+                        
+                        if dt > 0.2: 
+                            dx = p_new[0] - p_old[0]
+                            dy = p_new[1] - p_old[1]
+                            distance = np.sqrt(dx**2 + dy**2) # Khoảng cách Euclidean
+                            speed = distance / dt # Vận tốc: Pixel/giây
+                            
+                            total_speed += speed
+                            valid_speed_count += 1
 
-                cv2.putText(frame, f"Vehicles: {vehicle_count}", (30, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                # Tính vận tốc trung bình của toàn bộ dòng xe trong ROI
+                avg_speed = total_speed / valid_speed_count if valid_speed_count > 0 else 0.0
 
-                cv2.putText(frame, f"People: {people_count}", (30, 80),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-
+                # --- ĐÁNH GIÁ TRẠNG THÁI GIAO THÔNG ---
                 if vehicle_count > congestion_threshold or people_count > crowd_threshold:
-                    status_text = "Trang thai: Dong duc"
-                    status_color = (0, 0, 255)
+                    if valid_speed_count > 0 and avg_speed < speed_threshold:
+                        # Xe đông + Tốc độ chậm rùa bò -> TẮC NGHẼN
+                        status_text = "Trang thai: TAC NGHEN!"
+                        status_color = (0, 0, 255) # Đỏ
+                    else:
+                        # Xe đông + Tốc độ vẫn cao -> ĐÔNG ĐÚC
+                        status_text = "Trang thai: Dong duc (Dang luu thong)"
+                        status_color = (0, 165, 255) # Cam
                 else:
+                    # Xe ít -> THÔNG THOÁNG
                     status_text = "Trang thai: Thong thoang"
-                    status_color = (0, 255, 0)
+                    status_color = (0, 255, 0) # Xanh lá
 
-                cv2.putText(frame, status_text, (30, 130),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+                # --- VẼ THÔNG TIN LÊN MÀN HÌNH ---
+                cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
+                cv2.putText(frame, "Bam ESC de thoat", (30, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                cv2.putText(frame, f"Vehicles: {vehicle_count}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                cv2.putText(frame, f"Avg Speed: {int(avg_speed)} px/s", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                cv2.putText(frame, status_text, (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
 
-                # FPS Calculation (Trung bình mỗi giây)
+                # FPS Calculation
                 curr_time = time.time()
                 fps_frame_count += 1
                 if curr_time - prev_time >= 1.0:
@@ -336,9 +381,7 @@ class App:
                     prev_time = curr_time
                     fps_frame_count = 0
 
-                cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 160),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-
+                cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
                 cv2.imshow("Vehicle Detection", frame)
 
                 if cv2.waitKey(1) == 27:
@@ -346,7 +389,6 @@ class App:
 
             cap.release()
             cv2.destroyAllWindows()
-
             self.update_status("Đã hoàn thành!", "black")
             self.reset_ui()
 
