@@ -7,7 +7,7 @@ model = YOLO("models/yolo26l.engine", task="detect")
 IMAGE_DIR = "Dataset/archive/images/train" 
 LABEL_DIR = "Dataset/archive/labels/train"
 
-TARGET_CLASSES = [0, 1, 2, 3] # person, bicycle, car, motorcycle
+TARGET_CLASSES = [0, 1, 2, 3, 5, 7] # person, bicycle, car, motorcycle, bus, truck
 
 image_paths = []
 for ext in ('*.jpg', '*.png', '*.jpeg'):
