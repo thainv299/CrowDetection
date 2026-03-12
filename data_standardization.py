@@ -1,8 +1,8 @@
 import os
 import glob
 
-LABEL_DIR = "Dataset/archive/labels/train"
-OUTPUT_DIR = "Dataset/archive/labels/train_hbb_cleaned"
+LABEL_DIR = "Dataset/archive/labels/val"
+OUTPUT_DIR = "Dataset/archive/labels/val_hbb_cleaned"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -47,7 +47,7 @@ for txt_path in txt_paths:
             if class_id == 1:
                 final_class_id = 4
             else:
-                final_class_id = class_id # Giữ nguyên nếu có class khác
+                final_class_id = 4 # Giữ nguyên nếu có class khác
                 
             # Lưu lại theo chuẩn YOLO
             new_lines.append(f"{final_class_id} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}")
@@ -64,4 +64,4 @@ for txt_path in txt_paths:
         for line in new_lines:
             f.write(line + "\n")
 
-print("Hoàn tất! Toàn bộ nhãn đã được đưa về chuẩn YOLO HBB và đổi ID biển số thành 4.")
+print("Hoàn tất!")
