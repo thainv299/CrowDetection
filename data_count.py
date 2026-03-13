@@ -7,7 +7,7 @@ def check_yolo_labels(label_dir):
         return
 
     # Từ điển tên class theo đúng ID 
-    class_map = {0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 5: "Bus", 7: "Truck"}
+    class_map = {0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 4 :"Plate", 5: "Bus", 7: "Truck"}
     
     images_per_class = defaultdict(int) # Đếm số ảnh chứa class
     boxes_per_class = defaultdict(int)  # Đếm tổng số hộp (box) của class
@@ -36,5 +36,5 @@ def check_yolo_labels(label_dir):
         name = class_map.get(c_id, f"ID {c_id} (Biển số/Khác)")
         print(f"-> {name}: Xuất hiện trong {images_per_class[c_id]} ảnh (Tổng: {boxes_per_class[c_id]} đối tượng)")
 
-check_yolo_labels("Dataset/COCO_Balanced/labels/train")
-check_yolo_labels("Dataset/COCO_Balanced/labels/val")
+check_yolo_labels("Dataset/archive/labels/train")
+check_yolo_labels("Dataset/archive/labels/val")
