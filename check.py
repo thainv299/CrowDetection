@@ -167,13 +167,22 @@ class LabelCheckerApp:
             
             # Đợi phím
             while True:
-                key = cv2.waitKey(0) & 0xFF
+                key = cv2.waitKey(100) & 0xFF
                 if key == 27: # ESC
                     cv2.destroyAllWindows()
                     return # Exit function completely
                 elif key == ord('q') or key == ord('Q'):
                     cv2.destroyWindow(window_title)
                     break # Go to next image
+
+                # Xử lý khi người dùng bấm nút X tắt cửa sổ
+                try:
+                    if cv2.getWindowProperty(window_title, cv2.WND_PROP_VISIBLE) < 1:
+                        cv2.destroyAllWindows()
+                        return # Thoát hoàn toàn giống hệt ESC
+                except cv2.error:
+                    cv2.destroyAllWindows()
+                    return
                     
         cv2.destroyAllWindows()
         messagebox.showinfo("Hoàn thành", "Đã duyệt qua toàn bộ hình ảnh đã chọn!")
