@@ -7,7 +7,7 @@ def check_yolo_labels(label_dir):
         return
 
     # Từ điển tên class theo đúng ID 
-    class_map = {0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 4 :"Plate", 5: "Bus", 7: "Truck"}
+    class_map = {0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 4 :"Plate", 5: "Bus", 6: "Truck"}
     
     images_per_class = defaultdict(int) # Đếm số ảnh chứa class
     boxes_per_class = defaultdict(int)  # Đếm tổng số hộp (box) của class

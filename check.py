@@ -10,7 +10,7 @@ class_names = {
     3: "Xe_may", 
     4: "Bien_so",
     5: "Xe_bus",   
-    7: "Xe_tai"    
+    6: "Xe_tai"    
 }
 
 colors = {
@@ -20,7 +20,7 @@ colors = {
     3: (0, 255, 255),   # Xe_may: Vàng
     4: (0, 0, 255),     # Bien_so: Đỏ
     5: (0, 165, 255),   # Xe_bus: Cam
-    7: (255, 0, 255)    # Xe_tai: Tím (Magenta)
+    6: (255, 0, 255)    # Xe_tai: Tím (Magenta)
 }
 
 class LabelCheckerApp:
