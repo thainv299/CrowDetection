@@ -1,0 +1,12 @@
+names:
+- person
+- bicycle
+- car
+- motorcycle
+- license_plate
+- bus
+- truck
+nc: 7
+path: /kaggle/input/datasets/thainguyenvan29/coco-balanced/COCO_Balanced
+train: images/train
+val: images/val
