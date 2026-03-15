@@ -238,7 +238,7 @@ class App:
 
             cap = cv2.VideoCapture(self.video_path)
 
-            target_classes = ["person", "car", "motorcycle", "bus", "truck"]
+            target_classes = ["person", "car", "motorcycle","license_plate", "bus", "truck"]
 
             congestion_threshold = 10
             crowd_threshold = 20
@@ -252,6 +252,11 @@ class App:
             
             frame_count = 0
             last_results = None
+
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if video_fps == 0 or np.isnan(video_fps): 
+                video_fps = 30.0 # Mặc định 30fps nếu không đọc được thông số file
+            ideal_frame_time = 1.0 / video_fps # Thời gian lý tưởng cho 1 frame (giây) 
 
             while cap.isOpened():
 
@@ -384,7 +389,13 @@ class App:
                 cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
                 cv2.imshow("Vehicle Detection", frame)
 
-                if cv2.waitKey(1) == 27:
+                processing_time = time.time() - current_time # Thời gian máy tính đã dùng để chạy model cho frame này
+                wait_time_sec = ideal_frame_time - processing_time # Thời gian còn thừa cần phải đợi
+                
+                # Đổi ra mili-giây cho waitKey (nếu máy chạy chậm hơn video thì đợi tối thiểu 1ms)
+                wait_time_ms = max(1, int(wait_time_sec * 1000)) 
+
+                if cv2.waitKey(wait_time_ms) == 27:
                     break
 
             cap.release()
