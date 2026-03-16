@@ -272,8 +272,11 @@ for line in lines:
 
 ### Hiệu năng sau finetune
 ![Kết quả train](assets/train_result.png)
+
 ![So khớp nhãn label và predict1](assets/train_result1.png)
+
 ![So khớp nhãn label và predict2](assets/train_result2.png)
+
 ![So khớp nhãn label và predict3](assets/train_result3.png)
 
 ---
