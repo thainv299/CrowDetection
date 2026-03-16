@@ -8,3 +8,4 @@ layouts/*
 Dataset/*
 models/*.engine
 models/*.onnx
+docs/**/*.pt
