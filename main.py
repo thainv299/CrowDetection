@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 import json
 import time
 from ultralytics import YOLO
@@ -8,7 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
 import re          
-import easyocr
+from paddleocr import PaddleOCR
 import queue
 
 class_names = {
@@ -94,11 +95,11 @@ class App:
 
     # ==========================================================================
     # TỐI ƯU 1: OCR WORKER CHẠY RIÊNG TRÊN THREAD NỀN
-    # Vòng lặp video KHÔNG bao giờ bị block bởi EasyOCR nữa.
+    # Vòng lặp video KHÔNG bao giờ bị block bởi PaddleOCR nữa.
     # Worker nhận ảnh từ queue -> đọc OCR -> ghi kết quả vào dict.
     # ==========================================================================
     def _ocr_worker(self):
-        """Thread nền: liên tục lấy ảnh từ queue và chạy EasyOCR."""
+        """Thread nền: liên tục lấy ảnh từ queue và chạy PaddleOCR."""
         while self._ocr_worker_running:
             try:
                 # Chờ tối đa 0.5s, nếu không có việc thì lặp lại để kiểm tra cờ
@@ -107,8 +108,9 @@ class App:
                 continue
 
             try:
-                ocr_res = self.ocr_reader.readtext(gray_lp, detail=0)
-                if ocr_res:
+                results = self.ocr_reader.ocr(gray_lp, cls=False)
+                if results and results[0]:
+                    ocr_res = [res[1][0] for res in results[0]]
                     raw_text = "".join(ocr_res).upper()
                     clean_text = re.sub(r'[^A-Z0-9]', '', raw_text)
                     # Kiểm tra định dạng biển số VN
@@ -271,10 +273,10 @@ class App:
             self.update_status("Đang tải model PyTorch...", "blue")
             model = YOLO(self.model_path).to("cuda")
 
-        # 2. Khởi tạo EasyOCR
+        # 2. Khởi tạo PaddleOCR
         if self.ocr_reader is None:
-            self.update_status("Đang tải mô hình đọc biển số (EasyOCR)...", "blue")
-            self.ocr_reader = easyocr.Reader(['en'], gpu=True)
+            self.update_status("Đang tải mô hình đọc biển số (PaddleOCR)...", "blue")
+            self.ocr_reader = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
 
         self.update_status("Đang warmup model...", "blue")
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
@@ -284,31 +286,31 @@ class App:
         return model
 
     # ==========================================================================
-    # TỐI ƯU 2: TIỀN XỬ LÝ ẢNH NHANH HƠN
-    # Thay bilateralFilter(d=11) chậm bằng GaussianBlur + Otsu threshold.
-    # Giảm từ ~30ms xuống ~1ms mỗi lần gọi.
+    # TỐI ƯU 2: TIỀN XỬ LÝ ẢNH DÀNH RIÊNG CHO PADDLEOCR
+    # Loại bỏ bộ lọc làm méo hình và Otsu Threshold vì việc bóp ảnh thành trắng/đen 
+    # sẽ phá hủy viền biển số, làm mất khả năng tự động xoay chữ nghiêng của PaddleOCR.
+    # Thay vào đó chỉ dùng hệ màu YUV để tăng cường độ nét kênh sáng (Y).
     # ==========================================================================
     def _preprocess_lp(self, frame, x1, y1, x2, y2):
-        """Cắt và tiền xử lý ảnh biển số để OCR."""
+        """Cắt và tiền xử lý ảnh màu biển số để PaddleOCR tự căn méo."""
         lp_crop = frame[y1:y2, x1:x2]
 
-        # Phóng to 2x để ký tự dễ nhận hơn
+        # Phóng to 2-3x bằng nội suy dạng khối (CUBIC) giúp giữ nguyên viền chữ khi phóng
         lp_crop = cv2.resize(lp_crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
 
-        # Chuyển sang ảnh xám
-        gray_lp = cv2.cvtColor(lp_crop, cv2.COLOR_BGR2GRAY)
+        # Chuyển không gian màu BGR -> YUV (giữ nguyên màu sắc ở kênh U, V, chỉ tách kênh độ sáng Y)
+        yuv = cv2.cvtColor(lp_crop, cv2.COLOR_BGR2YUV)
+        y, u, v = cv2.split(yuv)
 
-        # CLAHE tăng tương phản (giữ nguyên vì rất hiệu quả)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        gray_lp = clahe.apply(gray_lp)
+        # Tăng tối đa độ sắc nét của chữ trong mọi điều kiện ánh sáng (ngược sáng, loá)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        y = clahe.apply(y)
 
-        # TỐI ƯU: Thay bilateralFilter(11,17,17) ~30ms bằng GaussianBlur ~0.5ms
-        gray_lp = cv2.GaussianBlur(gray_lp, (3, 3), 0)
+        # Hợp nhất lại cấu trúc màu và trả về ảnh BGR chuẩn
+        yuv = cv2.merge((y, u, v))
+        processed_lp = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
 
-        # Threshold Otsu: tách chữ trắng/đen rõ ràng, giúp OCR chính xác hơn
-        _, gray_lp = cv2.threshold(gray_lp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        return gray_lp
+        return processed_lp
 
     def detect_video(self):
         try:
