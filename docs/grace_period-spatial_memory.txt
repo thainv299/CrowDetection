@@ -1,0 +1,47 @@
+1. Grace Period (Bù frame / Thời gian chờ)
+Vấn đề:
+Khi xe di chuyển nhanh, bị bóng râm lướt qua, hoặc camera bị mờ (motion blur), YOLO có thể đột ngột không nhận diện ra biển số trong 1 hoặc 2 frame. Nếu chúng ta xóa ngay kết quả hiển thị trên màn hình, khung viền (bounding box) sẽ bị chớp tắt liên tục, gây nhức mắt và tạo cảm giác phần mềm hoạt động không ổn định.
+
+Giải pháp (Grace Period):
+Cấp cho mỗi biển số một "khoảng thời gian ân hạn" (Grace Period). Nếu YOLO đột ngột mất dấu, ta không xóa nó ngay mà tiếp tục vẽ khung viền ở vị trí cuối cùng nó được nhìn thấy, trong tối đa 5 frame (MAX_LOST_FRAMES = 5). Nếu sau 5 frame mà YOLO vẫn không tìm lại được, ta mới chính thức xóa nó đi.
+
+Logic Code:
+
+Bước 1: Lưu vị trí liên tục. Mỗi khi YOLO nhận diện thành công một track_id, ta lưu tọa độ của nó vào từ điển active_tracks và reset bộ đếm khung hình bị lỡ (missed_frames = 0).
+
+Python
+active_tracks[track_id] = {'bbox': (x1, y1, x2, y2), 'missed_frames': 0}
+Bước 2: Tìm những xe bị rớt. Ở cuối vòng lặp (sau khi đã duyệt hết các xe YOLO tìm thấy), ta quét lại danh sách active_tracks. Những ID nào có mặt trong danh sách cũ nhưng không xuất hiện ở frame hiện tại (tid not in current_plate_ids) sẽ bị cộng dồn biến missed_frames.
+
+Bước 3: Bù hình hoặc Xóa bỏ.
+
+Nếu missed_frames > MAX_LOST_FRAMES: Quá thời gian chờ -> Xóa hẳn (del active_tracks[tid]).
+
+Nếu missed_frames <= MAX_LOST_FRAMES: Vẫn trong thời gian cứu vãn -> Lấy tọa độ cũ (old_x1, old_y1...) ra vẽ. Để phân biệt với box do YOLO bắt thật, mình set box "đoán bù" này thành màu Cam thay vì Xanh lá.
+
+2. Spatial Memory (Bộ nhớ không gian / Kế thừa ID)
+Vấn đề:
+Bộ bám sát (Tracker) như ByteTrack rất dễ bị lỗi "Nhảy ID" (ID Switch). Giả sử chiếc xe màu trắng đang được gán là ID 15, nó đã được chạy OCR và chốt là 43B15754. Tự nhiên có một người đi bộ lướt ngang qua che mất biển số 1 giây. Khi biển số xuất hiện lại, Tracker không nhận ra đó là xe cũ, nó gán cho biển số một ID hoàn toàn mới là ID 22.
+Hệ quả: Hệ thống quên mất kết quả 43B15754 và bắt đầu chạy OCR bầu chọn lại từ đầu cho ID 22, dẫn đến rủi ro đọc sai.
+
+Giải pháp (Spatial Memory):
+Xe cộ trong bãi đỗ thường đứng im hoặc di chuyển rất chậm. Do đó, ta sẽ cho hệ thống "nhớ" vị trí không gian của những biển số đã đọc thành công. Nếu một ID "mới toanh" xuất hiện ngay tại đúng vị trí mà một ID "cũ" vừa biến mất, hệ thống sẽ ngầm hiểu: "À, vẫn là chiếc xe đó thôi, lấy luôn biển số cũ đắp vào, khỏi cần quét OCR lại".
+
+Logic Code:
+
+Bước 1: Ghi nhớ vị trí. Mỗi khi một track_id chốt được biển số hợp lệ ([OK]), ta lưu tọa độ tâm (cx, cy) của biển số đó, kèm theo kết quả text và số thứ tự của frame hiện tại vào spatial_memory.
+
+Python
+spatial_memory[track_id] = (cx, cy, final_text, frame_count)
+Bước 2: Kiểm tra ID mới. Khi một track_id mới xuất hiện (chưa có trong plate_confirmed), ta tính tọa độ tâm của nó, rồi đem so sánh với tất cả các tọa độ cũ trong spatial_memory.
+
+Bước 3: Điều kiện kế thừa. Nó chỉ được phép kế thừa biển số cũ nếu thỏa mãn ĐỒNG THỜI 2 điều kiện:
+
+Về Không gian: Khoảng cách giữa 2 tâm phải rất nhỏ. Dùng định lý Pytago math.hypot(cx - old_cx, cy - old_cy) < 50 pixels.
+
+Về Thời gian: Thời gian từ lúc ID cũ biến mất đến lúc ID mới xuất hiện không được quá lâu (tránh trường hợp xe cũ rời đi, xe mới vào đỗ đúng chỗ đó). frame_count - old_frame < 150 (khoảng 5 giây).
+
+Python
+if frame_count - old_frame < 150 and math.hypot(cx - old_cx, cy - old_cy) < 50:
+    plate_confirmed[track_id] = old_text # Nhận luôn kết quả
+Sự kết hợp của cả 2 logic này tạo ra một lớp bảo vệ kép: Grace Period chống chớp tắt trong thời gian cực ngắn (dưới 0.2s), còn Spatial Memory chống mất dữ liệu khi hệ thống Tracking bị nhầm lẫn trong thời gian dài hơn (vài giây).
