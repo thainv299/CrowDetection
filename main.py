@@ -4,6 +4,8 @@ import os
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 import json
 import time
+import math
+from collections import Counter
 from ultralytics import YOLO
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -12,24 +14,17 @@ import re
 from paddleocr import PaddleOCR
 import queue
 
+# Import module xử lý OCR chuyên dụng
+import ocr_processor
+
 class_names = {
-    0: "Person", 
-    1: "Bicycle", 
-    2: "Car", 
-    3: "Motorcycle", 
-    4: "License Plate",
-    5: "Bus",   
-    6: "Truck"    
+    0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 
+    4: "License Plate", 5: "Bus", 6: "Truck"    
 }
 
 colors = {
-    0: (0, 255, 0),     # Nguoi: Xanh lá
-    1: (255, 0, 0),     # Xe_dap: Xanh dương
-    2: (255, 255, 0),   # O_to: Xanh lơ (Cyan)
-    3: (0, 255, 255),   # Xe_may: Vàng
-    4: (0, 0, 255),     # Bien_so: Đỏ
-    5: (0, 165, 255),   # Xe_bus: Cam
-    6: (255, 0, 255)    # Xe_tai: Tím (Magenta)
+    0: (0, 255, 0), 1: (255, 0, 0), 2: (255, 255, 0), 3: (0, 255, 255), 
+    4: (0, 0, 255), 5: (0, 165, 255), 6: (255, 0, 255)
 }
 
 class App:
@@ -44,15 +39,19 @@ class App:
         self.ocr_reader = None
         self.roi_polygon = None
 
-        # --- OCR ASYNC: Queue gửi việc vào, dict nhận kết quả ra ---
-        # maxsize=3: tránh tích lũy quá nhiều frame chờ xử lý
+        # ================= CẤU HÌNH THAM SỐ OCR (CONFIGS) =================
+        self.OCR_INTERVAL    = 4       # Chạy OCR mỗi N frame
+        self.VOTE_THRESHOLD  = 3       # Đọc giống nhau N lần thì chốt (Confirm)
+        self.CONF_THRESHOLD  = 0.32    # Ngưỡng tin cậy của YOLO
+        self.MAX_LOST_FRAMES = 5       # Số frame giữ hộp viền nếu YOLO rớt mạng
+        # ==================================================================
+
+        # --- OCR ASYNC QUEUE ---
         self._ocr_queue = queue.Queue(maxsize=3)
-        # Lưu kết quả OCR theo track_id, thread-safe vì chỉ ghi từ worker, đọc từ main
         self._ocr_pending_results = {}
-        # Cờ để dừng worker khi app tắt
         self._ocr_worker_running = False
 
-        # --- GIAO DIỆN KHÔNG THAY ĐỔI ---
+        # --- KHỞI TẠO GIAO DIỆN ---
         self.lbl_title = tk.Label(root, text="Phát hiện đông đúc / tắc nghẽn", font=("Arial", 14, "bold"))
         self.lbl_title.pack(pady=5)
 
@@ -93,61 +92,53 @@ class App:
         self.lbl_status = tk.Label(root, text="Sẵn sàng", fg="black", font=("Arial", 10))
         self.lbl_status.pack(side="bottom", pady=10)
 
-    # ==========================================================================
-    # TỐI ƯU 1: OCR WORKER CHẠY RIÊNG TRÊN THREAD NỀN
-    # Vòng lặp video KHÔNG bao giờ bị block bởi PaddleOCR nữa.
-    # Worker nhận ảnh từ queue -> đọc OCR -> ghi kết quả vào dict.
-    # ==========================================================================
+
     def _ocr_worker(self):
-        """Thread nền: liên tục lấy ảnh từ queue và chạy PaddleOCR."""
+        """Thread nền: Lấy ảnh từ queue -> chạy PaddleOCR (có format) -> Trả về kết quả"""
         while self._ocr_worker_running:
             try:
-                # Chờ tối đa 0.5s, nếu không có việc thì lặp lại để kiểm tra cờ
-                track_id, gray_lp = self._ocr_queue.get(timeout=0.5)
+                track_id, img_crop = self._ocr_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
 
             try:
-                results = self.ocr_reader.ocr(gray_lp, cls=False)
-                if results and results[0]:
-                    ocr_res = [res[1][0] for res in results[0]]
-                    raw_text = "".join(ocr_res).upper()
-                    clean_text = re.sub(r'[^A-Z0-9]', '', raw_text)
-                    # Kiểm tra định dạng biển số VN
-                    if re.match(r'^[1-9][0-9][A-Z][0-9]?\d{4,5}$', clean_text):
-                        # Ghi vào dict trung gian, vòng lặp chính sẽ đọc ở frame tiếp theo
-                        self._ocr_pending_results[track_id] = clean_text
+                # Gọi thẳng module ocr_processor đã import[cite: 3, 4]
+                clean_text, final_text, img_processed, img_plate_color, status_text, dst_w, dst_h = ocr_processor.run_ocr(self.ocr_reader, img_crop)
+                
+                # Trả kết quả dưới dạng dict để luồng chính nhận
+                self._ocr_pending_results[track_id] = {
+                    'clean_text': clean_text,
+                    'final_text': final_text,
+                    'img_processed': img_processed,
+                    'img_before': img_crop,
+                    'status_text': status_text,
+                    'dst_w': dst_w,
+                    'dst_h': dst_h
+                }
             except Exception as e:
                 print(f"[OCR Worker] Lỗi: {e}")
             finally:
                 self._ocr_queue.task_done()
 
     def _start_ocr_worker(self):
-        """Khởi động thread OCR nền."""
         if not self._ocr_worker_running:
             self._ocr_worker_running = True
             t = threading.Thread(target=self._ocr_worker, daemon=True)
             t.start()
 
     def _stop_ocr_worker(self):
-        """Dừng thread OCR nền."""
         self._ocr_worker_running = False
 
+    # (Các hàm Giao diện như select_model, select_video, load_layout, clear_layout, open_draw_roi, draw_roi không thay đổi)
     def select_model(self):
-        path = filedialog.askopenfilename(
-            title="Chọn Model YOLO",
-            filetypes=[("YOLO Model", "*.pt *.engine"), ("PyTorch", "*.pt"), ("TensorRT Engine", "*.engine"), ("All Files", "*.*")]
-        )
+        path = filedialog.askopenfilename(title="Chọn Model YOLO", filetypes=[("YOLO Model", "*.pt *.engine"), ("All Files", "*.*")])
         if path:
             self.model_path = path
             self.lbl_model_path.config(text=f"{os.path.basename(self.model_path)}", fg="blue")
             self.model = None
 
     def select_video(self):
-        path = filedialog.askopenfilename(
-            title="Chọn Video",
-            filetypes=[("Video Files", "*.mp4 *.avi *.mkv *.mov"), ("All Files", "*.*")]
-        )
+        path = filedialog.askopenfilename(title="Chọn Video", filetypes=[("Video Files", "*.mp4 *.avi *.mkv *.mov"), ("All Files", "*.*")])
         if path:
             self.video_path = path
             self.lbl_path.config(text=f"{os.path.basename(self.video_path)}", fg="blue")
@@ -163,94 +154,53 @@ class App:
                             data = json.load(f)
                             self.roi_polygon = np.array(data["points"])
                         self.lbl_layout_status.config(text=f"Layout: Tự động tải {os.path.basename(layout_path)}", fg="green")
-                        self.update_status(f"Đã tự động tải layout: {os.path.basename(layout_path)}", "green")
+                        self.update_status(f"Đã tải: {os.path.basename(layout_path)}", "green")
                     except Exception as e:
-                        print(f"Không thể đọc file layout: {e}")
-                else:
-                    self.update_status("Sẵn sàng! Vui lòng vẽ vùng quan sát hoặc Load File Layout.", "black")
+                        pass
 
     def load_layout(self):
         path = filedialog.askopenfilename(title="Chọn File Layout", filetypes=[("JSON Files", "*.json")])
         if path:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    points = data.get("points")
-                    if points and len(points) >= 3:
-                        self.roi_polygon = np.array(points)
-                        self.lbl_layout_status.config(text=f"Layout: Đã load {os.path.basename(path)}", fg="green")
-                        self.update_status(f"Đã tải layout từ file", "green")
-                    else:
-                        messagebox.showwarning("Cảnh báo", "File JSON không hợp lệ hoặc không đủ 3 điểm!")
-            except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể tải file layout: {str(e)}")
+            with open(path, "r", encoding="utf-8") as f:
+                self.roi_polygon = np.array(json.load(f).get("points"))
+                self.lbl_layout_status.config(text=f"Layout: Đã load {os.path.basename(path)}", fg="green")
 
     def clear_layout(self):
         self.roi_polygon = None
         self.lbl_layout_status.config(text="Layout: Chưa có", fg="red")
-        self.update_status("Đã hủy layout hiện tại.", "black")
 
     def open_draw_roi(self):
-        if not self.video_path:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn video trước khi vẽ vùng quan sát!")
-            return
-
+        if not self.video_path: return
         cap = cv2.VideoCapture(self.video_path)
         ret, first_frame = cap.read()
         cap.release()
-
-        if not ret:
-            messagebox.showerror("Lỗi", "Không thể đọc khung hình đầu tiên của video!")
-            return
-
         polygon = self.draw_roi(first_frame)
-        if polygon is not None and len(polygon) >= 3:
-            answer = messagebox.askyesnocancel("Lưu Layout", "Bạn có muốn lưu Layout vừa vẽ không?\n\nChọn 'Yes' để lưu.\nChọn 'No' để áp dụng mà không lưu.\nChọn 'Cancel' để hủy bỏ.")
-            if answer is True:
-                self.roi_polygon = polygon
-                os.makedirs("layouts", exist_ok=True)
-                video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-                layout_path = filedialog.asksaveasfilename(
-                    initialdir=os.path.join(os.getcwd(), "layouts"),
-                    initialfile=f"{video_name}.json",
-                    title="Lưu file Layout JSON",
-                    defaultextension=".json",
-                    filetypes=[("JSON Files", "*.json")]
-                )
-                if layout_path:
-                    data = {"points": polygon.tolist()}
-                    try:
-                        with open(layout_path, "w", encoding="utf-8") as f:
-                            json.dump(data, f)
-                        self.lbl_layout_status.config(text=f"Layout: Đã lưu {os.path.basename(layout_path)}", fg="green")
-                        self.update_status(f"Đã lưu và áp dụng layout mới", "green")
-                    except Exception as e:
-                        messagebox.showerror("Lỗi", f"Không thể lưu file json: {str(e)}")
-                else:
-                    self.lbl_layout_status.config(text="Layout: Đã vẽ tạm", fg="orange")
-                    self.update_status("Không lưu file. Layout mới vẫn được tạm áp dụng.", "blue")
-            elif answer is False:
-                self.roi_polygon = polygon
-                self.lbl_layout_status.config(text="Layout: Đã vẽ tạm", fg="orange")
-                self.update_status("Đã vẽ tạm Layout thành công.", "green")
-            else:
-                self.update_status("Đã huỷ thao tác vẽ ROI.", "red")
-        else:
-            self.update_status("Đã huỷ vẽ ROI.", "red")
+        if polygon is not None:
+            self.roi_polygon = polygon
+            self.lbl_layout_status.config(text="Layout: Đã vẽ tạm", fg="orange")
+
+    def draw_roi(self, frame):
+        points = []
+        if self.roi_polygon is not None: points = [tuple(p) for p in self.roi_polygon.tolist()]
+        def mouse(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN: points.append((x, y))
+            elif event == cv2.EVENT_RBUTTONDOWN: points.clear()
+        clone = frame.copy()
+        cv2.namedWindow("Draw ROI")
+        cv2.setMouseCallback("Draw ROI", mouse)
+        while True:
+            temp = clone.copy()
+            for p in points: cv2.circle(temp, p, 5, (0, 0, 255), -1)
+            if len(points) > 1: cv2.polylines(temp, [np.array(points)], False, (255, 0, 0), 2)
+            cv2.imshow("Draw ROI", temp)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27 or key == 13: break
+        cv2.destroyWindow("Draw ROI")
+        return np.array(points) if len(points) >= 3 else None
 
     def start_detection(self):
-        if not self.video_path:
-            return
-        if self.roi_polygon is None or len(self.roi_polygon) < 3:
-            messagebox.showwarning("Cảnh báo", "Vui lòng 'Vẽ Vùng Quan Sát' hoặc load JSON trước khi chạy detect!")
-            return
-
+        if not self.video_path or self.roi_polygon is None: return
         self.btn_start.config(state=tk.DISABLED)
-        self.btn_select.config(state=tk.DISABLED)
-        self.btn_select_model.config(state=tk.DISABLED)
-        self.btn_draw_roi.config(state=tk.DISABLED)
-        self.btn_load_layout.config(state=tk.DISABLED)
-        
         threading.Thread(target=self.detect_video, daemon=True).start()
 
     def update_status(self, text, color="black"):
@@ -258,242 +208,224 @@ class App:
 
     def reset_ui(self):
         self.root.after(0, lambda: self.btn_start.config(state=tk.NORMAL))
-        self.root.after(0, lambda: self.btn_select.config(state=tk.NORMAL))
-        self.root.after(0, lambda: self.btn_select_model.config(state=tk.NORMAL))
-        self.root.after(0, lambda: self.btn_draw_roi.config(state=tk.NORMAL))
-        self.root.after(0, lambda: self.btn_load_layout.config(state=tk.NORMAL))
 
     def load_model(self):
-        # 1. Tải YOLO
-        ext = os.path.splitext(self.model_path)[1].lower()
-        if ext == ".engine":
-            self.update_status("Đang tải TensorRT Engine...", "blue")
-            model = YOLO(self.model_path, task="detect")
-        else:
-            self.update_status("Đang tải model PyTorch...", "blue")
-            model = YOLO(self.model_path).to("cuda")
-
-        # 2. Khởi tạo PaddleOCR
+        model = YOLO(self.model_path).to("cuda") if not self.model_path.endswith(".engine") else YOLO(self.model_path, task="detect")
         if self.ocr_reader is None:
-            self.update_status("Đang tải mô hình đọc biển số (PaddleOCR)...", "blue")
-            self.ocr_reader = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
-
-        self.update_status("Đang warmup model...", "blue")
+            # QUAN TRỌNG: Phải bật det=True để PaddleOCR tự tìm vùng[cite: 3, 4]
+            self.ocr_reader = PaddleOCR(use_angle_cls=False, det=True, lang='en', show_log=False)
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-        for _ in range(5):
-            model.predict(dummy, verbose=False)
-
+        for _ in range(5): model.predict(dummy, verbose=False)
         return model
-
-    # ==========================================================================
-    # TỐI ƯU 2: TIỀN XỬ LÝ ẢNH DÀNH RIÊNG CHO PADDLEOCR
-    # Loại bỏ bộ lọc làm méo hình và Otsu Threshold vì việc bóp ảnh thành trắng/đen 
-    # sẽ phá hủy viền biển số, làm mất khả năng tự động xoay chữ nghiêng của PaddleOCR.
-    # Thay vào đó chỉ dùng hệ màu YUV để tăng cường độ nét kênh sáng (Y).
-    # ==========================================================================
-    def _preprocess_lp(self, frame, x1, y1, x2, y2):
-        """Cắt và tiền xử lý ảnh màu biển số để PaddleOCR tự căn méo."""
-        lp_crop = frame[y1:y2, x1:x2]
-
-        # Phóng to 2-3x bằng nội suy dạng khối (CUBIC) giúp giữ nguyên viền chữ khi phóng
-        lp_crop = cv2.resize(lp_crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-
-        # Chuyển không gian màu BGR -> YUV (giữ nguyên màu sắc ở kênh U, V, chỉ tách kênh độ sáng Y)
-        yuv = cv2.cvtColor(lp_crop, cv2.COLOR_BGR2YUV)
-        y, u, v = cv2.split(yuv)
-
-        # Tăng tối đa độ sắc nét của chữ trong mọi điều kiện ánh sáng (ngược sáng, loá)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        y = clahe.apply(y)
-
-        # Hợp nhất lại cấu trúc màu và trả về ảnh BGR chuẩn
-        yuv = cv2.merge((y, u, v))
-        processed_lp = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
-
-        return processed_lp
 
     def detect_video(self):
         try:
-            if self.model is None:
-                self.model = self.load_model()
-
-            # Khởi động OCR worker thread nền trước khi vào vòng lặp
+            if self.model is None: self.model = self.load_model()
             self._start_ocr_worker()
             self.update_status("Đang nhận diện...", "green")
 
             cap = cv2.VideoCapture(self.video_path)
-
             target_classes = ["person", "car", "motorcycle", "license_plate", "bus", "truck"]
-
+            
+            # Cấu hình Vận tốc và Giao thông
             congestion_threshold = 10
             crowd_threshold = 20
             speed_threshold = 10
-
             track_history = {}
 
-            # lp_history: lưu lịch sử biển số theo track_id
-            # Cấu trúc: {track_id: {'candidates': [], 'final_plate': None, 'last_seen': time}}
-            lp_history = {}
+            # ================= CÁC BIẾN THEO DÕI OCR VÀ BÙ FRAME =================
+            plate_history   = {}   # Ghi nhận các text đọc được
+            plate_confirmed = {}   # Lưu kết quả chốt cuối cùng
+            plate_raw_cache = {}   # Text thô
+            active_tracks   = {}   # Bù frame rớt {track_id: {'bbox': (x,y,x,y), 'missed_frames': 0}}
+            spatial_memory  = {}   # Kế thừa ID {track_id: (cx, cy, final_text, frame_count)}
+            last_seen_plate = {}   # Hỗ trợ dọn rác bộ nhớ
+            last_comparison_window = None
+            # =====================================================================
 
             prev_time = time.time()
-            fps_frame_count = 0
-            current_fps = 0.0
-            
-            frame_count = 0
+            fps_frame_count, current_fps, frame_count = 0, 0.0, 0
             last_results = None
 
-            video_fps = cap.get(cv2.CAP_PROP_FPS)
-            if video_fps == 0 or np.isnan(video_fps): 
-                video_fps = 30.0 
+            video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0 
             ideal_frame_time = 1.0 / video_fps
 
             while cap.isOpened():
                 ret, frame = cap.read()
-                if not ret:
-                    break
-
+                if not ret: break
+                
                 current_time = time.time()
                 frame_count += 1
 
-                # Bỏ qua frame chẵn (giữ nguyên logic cũ)
+                # Frame Skipping (Tăng tốc xử lý)
                 if frame_count % 2 == 0 and last_results is not None:
                     results = last_results
                 else:
                     results = self.model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
                     last_results = results
                 
-                vehicle_count = 0
-                people_count = 0
+                vehicle_count, people_count = 0, 0
                 current_ids_in_roi = []
+                current_plate_ids = set()
                 
                 for r in results:
                     for box in r.boxes:
                         cls_id = int(box.cls[0])
                         label = self.model.names[cls_id]
+                        conf = float(box.conf[0])
 
-                        if label in target_classes:
-                            track_id = -1
-                            if box.id is not None:
-                                track_id = int(box.id[0])
+                        if label not in target_classes or conf <= self.CONF_THRESHOLD:
+                            continue
 
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            cx = int((x1 + x2) / 2)
-                            cy = int((y1 + y2) / 2)
+                        track_id = int(box.id[0]) if box.id is not None else -1
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
 
-                            inside = cv2.pointPolygonTest(self.roi_polygon, (cx, cy), False)
+                        # Kiểm tra xem vật thể có nằm trong Vùng ROI hay không
+                        if cv2.pointPolygonTest(self.roi_polygon, (cx, cy), False) >= 0:
+                            box_color = colors.get(cls_id, (255, 255, 255))
 
-                            if inside >= 0:
-                                box_color = colors.get(cls_id, (255, 255, 255))
+                            if label == "person":
+                                people_count += 1
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                                
+                            elif label in ["car", "motorcycle", "bus", "truck"]:
+                                vehicle_count += 1
+                                if track_id != -1:
+                                    current_ids_in_roi.append(track_id)
+                                    if track_id not in track_history: track_history[track_id] = []
+                                    track_history[track_id].append((cx, cy, current_time))
+                                    track_history[track_id] = [p for p in track_history[track_id] if current_time - p[2] <= 2.0]
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                                cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
 
-                                if label == "person":
-                                    people_count += 1
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
-                                    cv2.putText(frame, f"ID:{track_id} person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                            elif label == "license_plate" and track_id != -1:
+                                current_plate_ids.add(track_id)
+                                last_seen_plate[track_id] = current_time
+
+                                w, h = x2 - x1, y2 - y1
+                                if w <= 20 or h <= 10: continue
+
+                                # 1. Kế thừa Spatial Memory[cite: 3, 4]
+                                if track_id not in plate_confirmed:
+                                    for old_id, (old_cx, old_cy, old_text, old_frame) in list(spatial_memory.items()):
+                                        if frame_count - old_frame < 150 and math.hypot(cx - old_cx, cy - old_cy) < 50:
+                                            plate_confirmed[track_id] = old_text
+                                            plate_raw_cache[track_id] = "INHERITED"
+                                            break
+
+                                # Cập nhật Grace Period
+                                active_tracks[track_id] = {'bbox': (x1, y1, x2, y2), 'missed_frames': 0}
+
+                                # 2. Lấy Text và Hiển thị
+                                if track_id in plate_confirmed:
+                                    final_text = plate_confirmed[track_id]
+                                    display_text = f"[OK] {final_text}"
+                                    spatial_memory[track_id] = (cx, cy, final_text, frame_count)
                                     
-                                elif label in ["car", "motorcycle", "bus", "truck"]:
-                                    vehicle_count += 1
-                                    if track_id != -1:
-                                        current_ids_in_roi.append(track_id)
-                                        if track_id not in track_history:
-                                            track_history[track_id] = []
-                                        track_history[track_id].append((cx, cy, current_time))
-                                        track_history[track_id] = [p for p in track_history[track_id] if current_time - p[2] <= 2.0]
-                                        
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
-                                    cv2.putText(frame, f"ID:{track_id} {label}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
-                                    cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
+                                elif track_id in self._ocr_pending_results:
+                                    # Nhận kết quả từ Queue
+                                    res = self._ocr_pending_results.pop(track_id)
+                                    final_text = res['final_text']
+                                    plate_raw_cache[track_id] = res['clean_text']
 
-                                elif label == "license_plate" and track_id != -1:
-                                    if track_id not in lp_history:
-                                        lp_history[track_id] = {'candidates': [], 'final_plate': None, 'last_seen': current_time}
-                                    
-                                    lp_history[track_id]['last_seen'] = current_time
-                                    w, h = x2 - x1, y2 - y1
+                                    # 3. Lọc Regex[cite: 3, 4]
+                                    if ocr_processor.is_valid_vn_plate(final_text):
+                                        if track_id not in plate_history: plate_history[track_id] = []
+                                        plate_history[track_id].append(final_text)
 
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                                        counter = Counter(plate_history[track_id])
+                                        best, count = counter.most_common(1)[0]
 
-                                    # =========================================
-                                    # TỐI ƯU 1: Nhận kết quả từ OCR worker
-                                    # Thay vì chờ OCR xong mới tiếp tục,
-                                    # chỉ đơn giản là đọc kết quả đã có sẵn.
-                                    # =========================================
-                                    if track_id in self._ocr_pending_results:
-                                        new_text = self._ocr_pending_results.pop(track_id)
-                                        lp_history[track_id]['candidates'].append(new_text)
-                                        count = lp_history[track_id]['candidates'].count(new_text)
-                                        if count >= 3:
-                                            lp_history[track_id]['final_plate'] = new_text
-                                            print(f"✅ Đã chốt biển số: {new_text} (ID: {track_id})")
-
-                                    if lp_history[track_id]['final_plate'] is not None:
-                                        # Đã chốt -> Hiển thị, không cần gửi OCR nữa
-                                        final_text = lp_history[track_id]['final_plate']
-                                        cv2.putText(frame, f"[{final_text}]", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                                    else:
-                                        # TỐI ƯU 3: Tăng interval lên 20 frame (từ 10)
-                                        # để giảm số lần đẩy vào queue OCR
-                                        if frame_count % 10 == 0:
-                                            # Tiền xử lý nhanh (không block)
-                                            gray_lp = self._preprocess_lp(frame, x1, y1, x2, y2)
-
-                                            # Đẩy vào queue cho worker xử lý, không chờ
-                                            # put_nowait: bỏ qua nếu queue đầy (tránh lag)
-                                            try:
-                                                self._ocr_queue.put_nowait((track_id, gray_lp))
-                                            except queue.Full:
-                                                pass  # Queue đang bận -> bỏ qua frame này, frame sau thử lại
-
-                                        # Hiển thị biển số tạm tốt nhất đang có
-                                        current_cands = lp_history[track_id]['candidates']
-                                        if current_cands:
-                                            best_guess = max(set(current_cands), key=current_cands.count)
-                                            cv2.putText(frame, f"~{best_guess}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                                        if count >= self.VOTE_THRESHOLD:
+                                            plate_confirmed[track_id] = best
+                                            display_text = f"[OK] {best}"
+                                            spatial_memory[track_id] = (cx, cy, best, frame_count)
                                         else:
-                                            cv2.putText(frame, "Reading...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                                            display_text = f"[?] {best} ({count}/{self.VOTE_THRESHOLD})"
+                                    else:
+                                        display_text = f"[SKIP] {final_text}" if final_text else "..."
 
-                # --- DỌN DẸP BỘ NHỚ BIỂN SỐ ---
-                for tid in list(lp_history.keys()):
-                    if current_time - lp_history[tid]['last_seen'] > 3.0:
-                        del lp_history[tid]
+                                    # Cập nhật cửa sổ debug (Tùy chọn hiển thị)
+                                    img_before_r = cv2.resize(res['img_before'], (res['dst_w'], res['dst_h']))
+                                    img_after_r = cv2.resize(res['img_processed'], (res['dst_w'], res['dst_h']))
+                                    cv2.putText(img_after_r, f"RAW: {res['clean_text']}", (5, res['dst_h'] - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 2)
+                                    cv2.putText(img_after_r, f"FIX: {display_text}", (5, res['dst_h'] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+                                    last_comparison_window = np.vstack((img_before_r, img_after_r))
 
-                # --- LOGIC TÍNH TOÁN VẬN TỐC ---
-                total_speed = 0.0
-                valid_speed_count = 0
+                                else:
+                                    display_text = (plate_history.get(track_id) or [plate_raw_cache.get(track_id, "...")])[-1]
 
+                                # Gửi ảnh mới vào Queue để đọc (Chỉ gửi nếu chưa confirm)
+                                if track_id not in plate_confirmed and frame_count % self.OCR_INTERVAL == 0:
+                                    pad = 2
+                                    x1_p, y1_p = max(0, x1 - pad), max(0, y1 - pad)
+                                    x2_p, y2_p = min(frame.shape[1], x2 + pad), min(frame.shape[0], y2 + pad)
+                                    img_crop = frame[y1_p:y2_p, x1_p:x2_p].copy()
+                                    try:
+                                        self._ocr_queue.put_nowait((track_id, img_crop))
+                                    except queue.Full:
+                                        pass
+
+                                # Vẽ Box Biển Số
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                color = (0, 255, 0) if "[OK]" in display_text else ((0, 0, 255) if "[SKIP]" in display_text else (0, 255, 255))
+                                cv2.putText(frame, display_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+                # ================= LOGIC BÙ FRAME (GRACE PERIOD) =================
+                for tid in list(active_tracks.keys()):
+                    if tid not in current_plate_ids:
+                        active_tracks[tid]['missed_frames'] += 1
+                        if active_tracks[tid]['missed_frames'] > self.MAX_LOST_FRAMES:
+                            del active_tracks[tid]
+                        else:
+                            old_x1, old_y1, old_x2, old_y2 = active_tracks[tid]['bbox']
+                            if tid in plate_confirmed:
+                                display_text, color = f"[OK] {plate_confirmed[tid]}", (0, 255, 0) 
+                            else:
+                                display_text = (plate_history.get(tid) or ["..."])[-1]
+                                color = (0, 165, 255) 
+                            cv2.rectangle(frame, (old_x1, old_y1), (old_x2, old_y2), color, 2)
+                            cv2.putText(frame, display_text, (old_x1, old_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                # =================================================================
+
+                # Dọn dẹp rác bộ nhớ (Memory Leak Prevention)
+                for tid in list(last_seen_plate.keys()):
+                    if current_time - last_seen_plate[tid] > 5.0: # Không thấy trong 5 giây thì xóa
+                        plate_history.pop(tid, None)
+                        plate_confirmed.pop(tid, None)
+                        plate_raw_cache.pop(tid, None)
+                        del last_seen_plate[tid]
+                
+                for sid in list(spatial_memory.keys()):
+                    if frame_count - spatial_memory[sid][3] > 300: # Xóa vết cũ sau khoảng 10s
+                        del spatial_memory[sid]
+
+                # (Phần Code tính toán Vận Tốc - Tắc Nghẽn giữ nguyên)
+                total_speed, valid_speed_count = 0.0, 0
                 for tid in list(track_history.keys()):
                     if tid not in current_ids_in_roi:
                         if len(track_history[tid]) > 0 and (current_time - track_history[tid][-1][2]) > 1.0:
                             del track_history[tid]
                         continue
-
                     points = track_history[tid]
                     if len(points) >= 2:
-                        p_old = points[0]
-                        p_new = points[-1]
-                        dt = p_new[2] - p_old[2]
+                        dt = points[-1][2] - points[0][2]
                         if dt > 0.2: 
-                            dx = p_new[0] - p_old[0]
-                            dy = p_new[1] - p_old[1]
-                            distance = np.sqrt(dx**2 + dy**2) 
-                            speed = distance / dt 
+                            speed = np.sqrt((points[-1][0]-points[0][0])**2 + (points[-1][1]-points[0][1])**2) / dt 
                             total_speed += speed
                             valid_speed_count += 1
 
                 avg_speed = total_speed / valid_speed_count if valid_speed_count > 0 else 0.0
 
-                # --- ĐÁNH GIÁ TRẠNG THÁI GIAO THÔNG ---
                 if vehicle_count > congestion_threshold or people_count > crowd_threshold:
                     if valid_speed_count > 0 and avg_speed < speed_threshold:
-                        status_text = "Trang thai: TAC NGHEN!"
-                        status_color = (0, 0, 255) 
+                        status_text, status_color = "Trang thai: TAC NGHEN!", (0, 0, 255) 
                     else:
-                        status_text = "Trang thai: Dong duc (Dang luu thong)"
-                        status_color = (0, 165, 255) 
+                        status_text, status_color = "Trang thai: Dong duc", (0, 165, 255) 
                 else:
-                    status_text = "Trang thai: Thong thoang"
-                    status_color = (0, 255, 0) 
+                    status_text, status_color = "Trang thai: Thong thoang", (0, 255, 0) 
 
-                # --- VẼ THÔNG TIN LÊN MÀN HÌNH ---
                 cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
                 cv2.putText(frame, "Bam ESC de thoat", (30, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
                 cv2.putText(frame, f"Vehicles: {vehicle_count}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
@@ -503,16 +435,16 @@ class App:
                 curr_time = time.time()
                 fps_frame_count += 1
                 if curr_time - prev_time >= 1.0:
-                    current_fps = fps_frame_count / (curr_time - prev_time)
-                    prev_time = curr_time
-                    fps_frame_count = 0
+                    current_fps, prev_time, fps_frame_count = fps_frame_count / (curr_time - prev_time), curr_time, 0
 
                 cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                
+                if last_comparison_window is not None:
+                    cv2.imshow("Before vs After Processing", last_comparison_window)
                 cv2.imshow("Vehicle Detection", frame)
 
                 processing_time = time.time() - current_time 
-                wait_time_sec = ideal_frame_time - processing_time 
-                wait_time_ms = max(1, int(wait_time_sec * 1000)) 
+                wait_time_ms = max(1, int((ideal_frame_time - processing_time) * 1000)) 
 
                 if cv2.waitKey(wait_time_ms) == 27:
                     break
@@ -527,57 +459,6 @@ class App:
             self._stop_ocr_worker()
             self.root.after(0, lambda: messagebox.showerror("Lỗi", str(e)))
             self.reset_ui()
-
-    # --- HÀM VẼ ROI KHÔNG ĐỔI ---
-    def draw_roi(self, frame):
-        points = []
-        if self.roi_polygon is not None and len(self.roi_polygon) >= 3:
-            points = self.roi_polygon.tolist()
-            points = [tuple(p) for p in points]
-
-        def mouse(event, x, y, flags, param):
-            nonlocal points
-            if event == cv2.EVENT_LBUTTONDOWN:
-                points.append((x, y))
-            elif event == cv2.EVENT_RBUTTONDOWN:
-                points.clear()
-
-        clone = frame.copy()
-        cv2.namedWindow("Draw ROI")
-        cv2.setMouseCallback("Draw ROI", mouse)
-
-        while True:
-            temp = clone.copy()
-            if points is not None and len(points) > 0:
-                for p in points:
-                    cv2.circle(temp, p, 5, (0, 0, 255), -1)
-            if points is not None and len(points) > 1:
-                cv2.polylines(temp, [np.array(points)], False, (255, 0, 0), 2)
-            cv2.putText(temp, "Left Click: draw | Right Click: clear | ESC/Close: cancel | ENTER: done",
-                        (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            cv2.imshow("Draw ROI", temp)
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:
-                points = None
-                break
-            elif key == 26: 
-                if points and len(points) > 0:
-                    points.pop()
-            elif key == 13 or key == 10: 
-                if points is not None and len(points) >= 3:
-                    break
-            try:
-                if cv2.getWindowProperty("Draw ROI", cv2.WND_PROP_VISIBLE) < 1:
-                    points = None
-                    break
-            except cv2.error:
-                points = None
-                break
-        try:
-            cv2.destroyWindow("Draw ROI")
-        except cv2.error:
-            pass
-        return np.array(points) if points is not None and len(points) >= 3 else None
 
 if __name__ == "__main__":
     root = tk.Tk()

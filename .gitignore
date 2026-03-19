@@ -9,3 +9,4 @@ Dataset/*
 models/*.engine
 models/*.onnx
 docs/**/*.pt
+__pycache__/*
