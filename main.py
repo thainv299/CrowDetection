@@ -13,8 +13,6 @@ import threading
 import re          
 from paddleocr import PaddleOCR
 import queue
-
-# Import module xử lý OCR chuyên dụng
 import ocr_processor
 
 class_names = {
@@ -39,12 +37,10 @@ class App:
         self.ocr_reader = None
         self.roi_polygon = None
 
-        # ================= CẤU HÌNH THAM SỐ OCR (CONFIGS) =================
         self.OCR_INTERVAL    = 4       # Chạy OCR mỗi N frame
         self.VOTE_THRESHOLD  = 3       # Đọc giống nhau N lần thì chốt (Confirm)
         self.CONF_THRESHOLD  = 0.32    # Ngưỡng tin cậy của YOLO
-        self.MAX_LOST_FRAMES = 5       # Số frame giữ hộp viền nếu YOLO rớt mạng
-        # ==================================================================
+        self.MAX_LOST_FRAMES = 5       # Số frame giữ hộp viền nếu YOLO không detect được
 
         # --- OCR ASYNC QUEUE ---
         self._ocr_queue = queue.Queue(maxsize=3)
@@ -102,7 +98,7 @@ class App:
                 continue
 
             try:
-                # Gọi thẳng module ocr_processor đã import[cite: 3, 4]
+                # Gọi module ocr_processor [cite: 3, 4]
                 clean_text, final_text, img_processed, img_plate_color, status_text, dst_w, dst_h = ocr_processor.run_ocr(self.ocr_reader, img_crop)
                 
                 # Trả kết quả dưới dạng dict để luồng chính nhận
@@ -129,7 +125,6 @@ class App:
     def _stop_ocr_worker(self):
         self._ocr_worker_running = False
 
-    # (Các hàm Giao diện như select_model, select_video, load_layout, clear_layout, open_draw_roi, draw_roi không thay đổi)
     def select_model(self):
         path = filedialog.askopenfilename(title="Chọn Model YOLO", filetypes=[("YOLO Model", "*.pt *.engine"), ("All Files", "*.*")])
         if path:
@@ -212,7 +207,6 @@ class App:
     def load_model(self):
         model = YOLO(self.model_path).to("cuda") if not self.model_path.endswith(".engine") else YOLO(self.model_path, task="detect")
         if self.ocr_reader is None:
-            # QUAN TRỌNG: Phải bật det=True để PaddleOCR tự tìm vùng[cite: 3, 4]
             self.ocr_reader = PaddleOCR(use_angle_cls=False, det=True, lang='en', show_log=False)
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         for _ in range(5): model.predict(dummy, verbose=False)
@@ -269,6 +263,12 @@ class App:
                 current_plate_ids = set()
                 
                 for r in results:
+                    valid_vehicles = []
+                    for box in r.boxes:
+                        tmp_label = self.model.names[int(box.cls[0])]
+                        if tmp_label in ["car", "bus", "truck"]:
+                            valid_vehicles.append(tuple(map(int, box.xyxy[0])))
+
                     for box in r.boxes:
                         cls_id = int(box.cls[0])
                         label = self.model.names[cls_id]
@@ -288,6 +288,7 @@ class App:
                             if label == "person":
                                 people_count += 1
                                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                                cv2.putText(frame, f"ID:{track_id} person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
                                 
                             elif label in ["car", "motorcycle", "bus", "truck"]:
                                 vehicle_count += 1
@@ -298,8 +299,19 @@ class App:
                                     track_history[track_id] = [p for p in track_history[track_id] if current_time - p[2] <= 2.0]
                                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
                                 cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
+                                cv2.putText(frame, f"ID:{track_id} {label}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
 
                             elif label == "license_plate" and track_id != -1:
+                                # Lọc biển số: Chỉ xử lý OCR nếu tâm biển số nằm trong ô tô/bus/truck
+                                is_valid_plate = False
+                                for vx1, vy1, vx2, vy2 in valid_vehicles:
+                                    if vx1 <= cx <= vx2 and vy1 <= cy <= vy2:
+                                        is_valid_plate = True
+                                        break
+                                
+                                if not is_valid_plate:
+                                    continue
+
                                 current_plate_ids.add(track_id)
                                 last_seen_plate[track_id] = current_time
 
@@ -401,7 +413,6 @@ class App:
                     if frame_count - spatial_memory[sid][3] > 300: # Xóa vết cũ sau khoảng 10s
                         del spatial_memory[sid]
 
-                # (Phần Code tính toán Vận Tốc - Tắc Nghẽn giữ nguyên)
                 total_speed, valid_speed_count = 0.0, 0
                 for tid in list(track_history.keys()):
                     if tid not in current_ids_in_roi:
