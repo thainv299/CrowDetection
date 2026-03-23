@@ -32,12 +32,18 @@ def get_plate_perspective(img_bgr):
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
 
     rect_pts = None
+    img_area = h * w  # Tính tổng diện tích bức ảnh crop
+
     for c in contours:
         perimeter = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.03 * perimeter, True)
+        
+        # Chỉ nắn góc nếu tìm thấy 4 điểm VÀ diện tích khung đó phải > 40% diện tích ảnh
         if len(approx) == 4:
-            rect_pts = approx.reshape(4, 2)
-            break
+            contour_area = cv2.contourArea(approx)
+            if contour_area > (img_area * 0.4): 
+                rect_pts = approx.reshape(4, 2)
+                break
 
     if rect_pts is not None:
         ordered_pts = order_points(rect_pts)
