@@ -11,9 +11,10 @@ import threading
 import re          
 from paddleocr import PaddleOCR
 from collections import deque
-from parking_manager import ParkingManager
-from ocr_manager import OCRManager
-from traffic_monitor import TrafficMonitor
+from modules.parking.parking_manager import ParkingManager
+from modules.ocr.ocr_manager import OCRManager
+from modules.traffic.traffic_monitor import TrafficMonitor
+from modules.alpr_logger import ALPRLogger
 
 class_names = {
     0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 
@@ -38,6 +39,7 @@ class App:
         self.roi_polygon = None
 
         self.parking_manager = ParkingManager(root, self)
+        self.alpr_logger = ALPRLogger()
         self.ocr_manager = None
         self.CONF_THRESHOLD = 0.32 # Ngưỡng tin cậy của YOLO
 
@@ -182,7 +184,7 @@ class App:
         model = YOLO(self.model_path).to("cuda") if not self.model_path.endswith(".engine") else YOLO(self.model_path, task="detect")
         if self.ocr_reader is None:
             self.ocr_reader = PaddleOCR(use_angle_cls=False, det=True, lang='en', show_log=False)
-            self.ocr_manager = OCRManager(self.ocr_reader)
+            self.ocr_manager = OCRManager(self.ocr_reader, alpr_logger=self.alpr_logger)
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         for _ in range(5): model.predict(dummy, verbose=False)
         return model

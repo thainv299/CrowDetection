@@ -81,7 +81,7 @@ class ParkingManager:
 
     def setup_detection(self, fps):
         self.fps = fps
-        ensure_dir("outputs/violations")
+        ensure_dir("logs/violations")
         self.logic = ViolationLogic(self.stop_seconds, self.move_thr_px, self.cooldown_seconds, fps=fps)
         self.frame_buffer = deque(maxlen=int(5 * fps))
 
@@ -91,7 +91,7 @@ class ParkingManager:
 
     def save_violation_video(self, ts, track_id):
         if not self.frame_buffer: return ""
-        video_dir = os.path.join("outputs", "violations")
+        video_dir = os.path.join("logs", "violations")
         ensure_dir(video_dir)
         video_path = os.path.join(video_dir, f"violation_{track_id}_{ts}.mp4")
         first_frame = self.frame_buffer[0]
@@ -123,7 +123,7 @@ class ParkingManager:
             else:
                 box_color = None
                 
-            state_str = "DO XE" if veh_state == PARKED else ("DUNG" if veh_state == STOPPED else "CHAY")
+            state_str = "PARKED" if veh_state == PARKED else ("STOPPED" if veh_state == STOPPED else "MOVING")
             display_label = f"ID:{track_id} {label} {state_str} {still_time:.1f}s"
             
             if self.logic.should_flag_violation(track_id, frame_count, in_no_park=in_no_park):
@@ -133,7 +133,7 @@ class ParkingManager:
                 
                 ts = now_ts()
                 if self.save_violation_frames:
-                    img_path = os.path.join("outputs", "violations", f"violation_{track_id}_{ts}.jpg")
+                    img_path = os.path.join("logs", "violations", f"violation_{track_id}_{ts}.jpg")
                     cv2.imwrite(img_path, frame)
                     if self.telegram_enabled:
                         caption = f"XE ĐỖ SAI QUY ĐỊNH\nID xe: {track_id}\nLoại xe: {label}\nThời gian đứng: {still_time:.1f}s"

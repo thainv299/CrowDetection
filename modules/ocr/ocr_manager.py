@@ -7,11 +7,12 @@ from collections import Counter
 from . import ocr_processor
 
 class OCRManager:
-    def __init__(self, reader, interval=4, vote_threshold=3, max_lost_frames=5):
+    def __init__(self, reader, interval=4, vote_threshold=3, max_lost_frames=5, alpr_logger=None):
         self.reader = reader
         self.OCR_INTERVAL = interval
         self.VOTE_THRESHOLD = vote_threshold
         self.MAX_LOST_FRAMES = max_lost_frames
+        self.alpr_logger = alpr_logger
         
         self.queue = queue.Queue(maxsize=3)
         self.pending_results = {}
@@ -138,6 +139,8 @@ class OCRManager:
                     self.plate_confirmed[track_id] = best
                     display_text = f"[OK] {best}"
                     self.spatial_memory[track_id] = (cx, cy, best, frame_count)
+                    if self.alpr_logger:
+                        self.alpr_logger.process_plate(best, frame_count, res['img_before'])
                 else:
                     display_text = f"[?] {best} ({count}/{self.VOTE_THRESHOLD})"
             else:
