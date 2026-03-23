@@ -16,9 +16,9 @@ class ALPRLogger:
         if not os.path.exists(self.csv_path):
             with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["Time", "Frame", "Plate", "Image_Path"])
+                writer.writerow(["Time", "Frame", "Plate", "Full_Frame_Image_Path"])
 
-    def process_plate(self, plate_text, current_frame, plate_img):
+    def process_plate(self, plate_text, current_frame, plate_img, full_frame, plate_coords):
         is_new_session = False
         
         if plate_text not in self.plate_sessions:
@@ -32,15 +32,22 @@ class ALPRLogger:
         self.plate_sessions[plate_text] = {"last_seen": current_frame}
         
         if is_new_session:
-            self._save_log(plate_text, current_frame, plate_img)
+            self._save_log(plate_text, current_frame, full_frame, plate_coords)
             
-    def _save_log(self, plate_text, current_frame, plate_img):
+    def _save_log(self, plate_text, current_frame, full_frame, plate_coords):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        img_name = f"{timestamp}_{plate_text}.jpg"
+        img_name = f"{timestamp}_{plate_text}_evidence.jpg"
         img_path = os.path.join(self.plates_dir, img_name)
         
+        # Make a copy of full_frame to draw on
+        evidence_frame = full_frame.copy()
+        
+        # Draw bounding box on the evidence copy
+        x1, y1, x2, y2 = plate_coords
+        cv2.rectangle(evidence_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        
         # Save image
-        cv2.imwrite(img_path, plate_img)
+        cv2.imwrite(img_path, evidence_frame)
         
         # Append object to csv log
         with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:

@@ -214,10 +214,12 @@ class App:
                 ret, frame = cap.read()
                 if not ret: break
                 
+                clean_frame = frame.copy()
+                
                 current_time = time.time()
                 frame_count += 1
 
-                self.parking_manager.update_buffer(frame.copy())
+                self.parking_manager.update_buffer(clean_frame.copy())
 
                 # Frame Skipping (Tăng tốc xử lý)
                 if frame_count % 2 == 0 and last_results is not None:
@@ -276,7 +278,7 @@ class App:
 
                             elif label == "license_plate" and track_id != -1:
                                 if self.ocr_manager:
-                                    processed = self.ocr_manager.process_plate(frame, track_id, x1, y1, x2, y2, cx, cy, valid_vehicles, current_time, frame_count)
+                                    processed = self.ocr_manager.process_plate(frame, clean_frame, track_id, x1, y1, x2, y2, cx, cy, valid_vehicles, current_time, frame_count)
                                     if processed:
                                         current_plate_ids.add(processed)
 

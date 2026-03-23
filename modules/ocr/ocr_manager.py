@@ -88,7 +88,7 @@ class OCRManager:
                     cv2.rectangle(frame, (old_x1, old_y1), (old_x2, old_y2), color, 2)
                     cv2.putText(frame, display_text, (old_x1, old_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-    def process_plate(self, frame, track_id, x1, y1, x2, y2, cx, cy, valid_vehicles, current_time, frame_count):
+    def process_plate(self, frame, clean_frame, track_id, x1, y1, x2, y2, cx, cy, valid_vehicles, current_time, frame_count):
         """Xử lý lôgic chính: check spatial memory, nhận kết quả queue, gửi queue, vẽ biển số lên frame."""
         # Lọc biển số: Chỉ xử lý OCR nếu tâm biển số nằm trong ô tô/bus/truck
         is_valid_plate = False
@@ -140,7 +140,7 @@ class OCRManager:
                     display_text = f"[OK] {best}"
                     self.spatial_memory[track_id] = (cx, cy, best, frame_count)
                     if self.alpr_logger:
-                        self.alpr_logger.process_plate(best, frame_count, res['img_before'])
+                        self.alpr_logger.process_plate(best, frame_count, res['img_before'], clean_frame, [x1, y1, x2, y2])
                 else:
                     display_text = f"[?] {best} ({count}/{self.VOTE_THRESHOLD})"
             else:
@@ -160,8 +160,8 @@ class OCRManager:
         if track_id not in self.plate_confirmed and frame_count % self.OCR_INTERVAL == 0:
             pad = 2
             x1_p, y1_p = max(0, x1 - pad), max(0, y1 - pad)
-            x2_p, y2_p = min(frame.shape[1], x2 + pad), min(frame.shape[0], y2 + pad)
-            img_crop = frame[y1_p:y2_p, x1_p:x2_p].copy()
+            x2_p, y2_p = min(clean_frame.shape[1], x2 + pad), min(clean_frame.shape[0], y2 + pad)
+            img_crop = clean_frame[y1_p:y2_p, x1_p:x2_p].copy()
             try:
                 self.queue.put_nowait((track_id, img_crop))
             except queue.Full:
