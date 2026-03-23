@@ -10,3 +10,8 @@ models/*.engine
 models/*.onnx
 docs/**/*.pt
 __pycache__/*
+outputs/*
+modules/*/__pycache__
+*/__pycache__
+modules/*/__init__.py
+modules/__init__.py
