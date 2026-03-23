@@ -115,6 +115,18 @@ class App:
                         self.update_status(f"Đã tải: {os.path.basename(layout_path)}", "green")
                     except Exception as e:
                         pass
+            
+            if self.parking_manager.no_park_polygon is None:
+                video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+                parking_layout_path = os.path.join("layouts", f"{video_name}_parking_layout.json")
+                if os.path.exists(parking_layout_path):
+                    try:
+                        with open(parking_layout_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            self.parking_manager.no_park_polygon = np.array(data["points"])
+                        self.parking_manager.lbl_no_park_status.config(text=f"Vùng cấm: Tự động tải {os.path.basename(parking_layout_path)}", fg="green")
+                    except Exception as e:
+                        pass
 
     def load_layout(self):
         path = filedialog.askopenfilename(title="Chọn File Layout", filetypes=[("JSON Files", "*.json")])
@@ -159,13 +171,16 @@ class App:
         while True:
             temp = clone.copy()
             # Thêm text hướng dẫn
-            cv2.putText(temp, "Chuot trai: Ve diem | Chuot phai: Xoa het | Enter/Esc: Luu", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(temp, "Chuot trai: Ve diem | Chuot phai: Xoa het | Ctrl+Z: Undo | Enter/Esc: Luu", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             
             for p in points: cv2.circle(temp, p, 5, line_color, -1)
             if len(points) > 1: cv2.polylines(temp, [np.array(points)], False, line_color, 2)
             cv2.imshow(window_name, temp)
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or key == 13: break
+            if key == 26 or key == ord('z'): # 26 is Ctrl+Z
+                if len(points) > 0:
+                    points.pop()
         cv2.destroyWindow(window_name)
         return np.array(points) if len(points) >= 3 else None
 
