@@ -5,9 +5,9 @@ import json
 import tkinter as tk
 from tkinter import filedialog
 from collections import deque
-from src.logic import ViolationLogic, MOVING, STOPPED, PARKED
-from src.telegram_bot import send_telegram_image, send_telegram_video
-from src.utils import ensure_dir, now_ts
+from .parking_logic import ViolationLogic, MOVING, STOPPED, PARKED
+from modules.utils.telegram_bot import send_telegram_image, send_telegram_video
+from modules.utils.common_utils import ensure_dir, now_ts
 
 class ParkingManager:
     def __init__(self, root, app_instance):

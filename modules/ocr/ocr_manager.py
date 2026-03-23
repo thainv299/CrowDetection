@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import math
 from collections import Counter
-import ocr_processor
+from . import ocr_processor
 
 class OCRManager:
     def __init__(self, reader, interval=4, vote_threshold=3, max_lost_frames=5):
@@ -64,6 +64,7 @@ class OCRManager:
                 self.plate_confirmed.pop(tid, None)
                 self.plate_raw_cache.pop(tid, None)
                 del self.last_seen_plate[tid]
+                self.pending_results.pop(tid, None)
         
         for sid in list(self.spatial_memory.keys()):
             if frame_count - self.spatial_memory[sid][3] > 300: # Xóa vết cũ sau khoảng 10s
@@ -106,7 +107,7 @@ class OCRManager:
         # 1. Kế thừa Spatial Memory
         if track_id not in self.plate_confirmed:
             for old_id, (old_cx, old_cy, old_text, old_frame) in list(self.spatial_memory.items()):
-                if frame_count - old_frame < 150 and math.hypot(cx - old_cx, cy - old_cy) < 50:
+                if frame_count - old_frame < 300 and math.hypot(cx - old_cx, cy - old_cy) < 100:
                     self.plate_confirmed[track_id] = old_text
                     self.plate_raw_cache[track_id] = "INHERITED"
                     break
