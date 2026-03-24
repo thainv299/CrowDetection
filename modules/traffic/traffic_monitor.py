@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 class TrafficMonitor:
-    def __init__(self, congestion_threshold=10, crowd_threshold=20, speed_threshold=10):
+    def __init__(self, congestion_threshold=10, crowd_threshold=20, speed_threshold=15):
         self.congestion_threshold = congestion_threshold
         self.crowd_threshold = crowd_threshold
         self.speed_threshold = speed_threshold
@@ -49,13 +49,16 @@ class TrafficMonitor:
 
         if self.vehicle_count > self.congestion_threshold or self.people_count > self.crowd_threshold:
             if valid_speed_count > 0 and avg_speed < self.speed_threshold:
+                traffic_level = 2
                 status_text, status_color = "Trang thai: TAC NGHEN!", (0, 0, 255) 
             else:
+                traffic_level = 1
                 status_text, status_color = "Trang thai: Dong duc", (0, 165, 255) 
         else:
+            traffic_level = 0
             status_text, status_color = "Trang thai: Thong thoang", (0, 255, 0)
             
-        return avg_speed, status_text, status_color
+        return avg_speed, status_text, status_color, traffic_level
 
     def draw_status(self, frame, avg_speed, status_text, status_color):
         cv2.putText(frame, f"Vehicles: {self.vehicle_count}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)

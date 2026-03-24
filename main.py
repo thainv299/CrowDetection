@@ -15,6 +15,8 @@ from modules.parking.parking_manager import ParkingManager
 from modules.ocr.ocr_manager import OCRManager
 from modules.traffic.traffic_monitor import TrafficMonitor
 from modules.alpr_logger import ALPRLogger
+from modules.traffic_alert_manager import TrafficAlertManager
+from modules.interactive_telegram_bot import start_bot_thread
 
 class_names = {
     0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 
@@ -40,6 +42,8 @@ class App:
 
         self.parking_manager = ParkingManager(root, self)
         self.alpr_logger = ALPRLogger()
+        self.traffic_alert_manager = TrafficAlertManager()
+        start_bot_thread(self.traffic_alert_manager)
         self.ocr_manager = None
         self.CONF_THRESHOLD = 0.32 # Ngưỡng tin cậy của YOLO
 
@@ -301,7 +305,8 @@ class App:
                     self.ocr_manager.draw_grace_period_boxes(frame, current_plate_ids)
                     self.ocr_manager.cleanup_memory(current_time, frame_count)
 
-                avg_speed, status_text, status_color = traffic_monitor.calculate_speed_and_status(current_time)
+                avg_speed, status_text, status_color, traffic_level = traffic_monitor.calculate_speed_and_status(current_time)
+                self.traffic_alert_manager.update_traffic_state(traffic_level, clean_frame, "", "")
 
                 cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
                 self.parking_manager.draw_polygon_overlay(frame)
@@ -317,13 +322,19 @@ class App:
                 
                 if self.ocr_manager:
                     self.ocr_manager.show_debug_window()
+                if traffic_level > 0 and not self.traffic_alert_manager.is_acknowledged:
+                    cv2.putText(frame, "Press 'A' to Acknowledge Alert", (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    
                 cv2.imshow("Vehicle Detection", frame)
 
                 processing_time = time.time() - current_time 
                 wait_time_ms = max(1, int((ideal_frame_time - processing_time) * 1000)) 
 
-                if cv2.waitKey(wait_time_ms) == 27:
+                key = cv2.waitKey(wait_time_ms) & 0xFF
+                if key == 27:
                     break
+                elif key in [ord('a'), ord('A')]:
+                    self.traffic_alert_manager.acknowledge_alert()
 
             cap.release()
             cv2.destroyAllWindows()
