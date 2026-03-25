@@ -218,7 +218,7 @@ class App:
             cap = cv2.VideoCapture(self.video_path)
             target_classes = ["person", "car", "motorcycle", "license_plate", "bus", "truck"]
             
-            traffic_monitor = TrafficMonitor()
+            traffic_monitor = TrafficMonitor(roi_polygon=self.roi_polygon)
 
             prev_time = time.time()
             fps_frame_count, current_fps, frame_count = 0, 0.0, 0
@@ -279,7 +279,8 @@ class App:
                                 cv2.putText(frame, f"ID:{track_id} person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
                                 
                             elif label in ["car", "motorcycle", "bus", "truck"]:
-                                traffic_monitor.log_vehicle(track_id, cx, cy, current_time)
+                                area = (x2 - x1) * (y2 - y1)
+                                traffic_monitor.log_vehicle(track_id, cx, cy, current_time, area=area)
                                 if track_id != -1:
                                     state_display_label, state_box_color = self.parking_manager.process_vehicle(
                                         frame, track_id, label, cx, cy, frame_count
@@ -318,7 +319,7 @@ class App:
                 if curr_time - prev_time >= 1.0:
                     current_fps, prev_time, fps_frame_count = fps_frame_count / (curr_time - prev_time), curr_time, 0
 
-                cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                cv2.putText(frame, f"FPS: {int(current_fps)}", (30, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 if self.ocr_manager:
                     self.ocr_manager.show_debug_window()

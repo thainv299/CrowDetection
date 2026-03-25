@@ -1,27 +1,35 @@
 import numpy as np
 import cv2
 
+# --- CONGESTION THRESHOLDS ---
+CONG_COUNT_THR = 10              # Level 1: Min vehicles to be considered "Crowded L1"
+CONG_PEOPLE_THR = 20             # Level 1: Min people to be considered "Crowded L1"
+CONG_AREA_PERCENT_THR = 40.0     # Level 2: Min ROI area % covered by vehicles to be "Crowded L2"
+CONG_SPEED_THR = 10.0            # Level 3: Max speed (px/s) to be considered "Congested"
+
 class TrafficMonitor:
-    def __init__(self, congestion_threshold=10, crowd_threshold=20, speed_threshold=15):
-        self.congestion_threshold = congestion_threshold
-        self.crowd_threshold = crowd_threshold
-        self.speed_threshold = speed_threshold
+    def __init__(self, roi_polygon=None):
+        self.roi_polygon = roi_polygon
+        self.roi_area = cv2.contourArea(np.array(self.roi_polygon)) if self.roi_polygon is not None else 0.0
         
         self.track_history = {}
         self.vehicle_count = 0
         self.people_count = 0
         self.current_ids_in_roi = []
+        self.total_vehicle_area = 0.0
         
     def reset_counters(self):
         self.vehicle_count = 0
         self.people_count = 0
         self.current_ids_in_roi = []
+        self.total_vehicle_area = 0.0
 
     def log_person(self):
         self.people_count += 1
 
-    def log_vehicle(self, track_id, cx, cy, current_time):
+    def log_vehicle(self, track_id, cx, cy, current_time, area=0.0):
         self.vehicle_count += 1
+        self.total_vehicle_area += area
         if track_id != -1:
             self.current_ids_in_roi.append(track_id)
             if track_id not in self.track_history:
@@ -47,20 +55,34 @@ class TrafficMonitor:
 
         avg_speed = total_speed / valid_speed_count if valid_speed_count > 0 else 0.0
 
-        if self.vehicle_count > self.congestion_threshold or self.people_count > self.crowd_threshold:
-            if valid_speed_count > 0 and avg_speed < self.speed_threshold:
-                traffic_level = 2
-                status_text, status_color = "Trang thai: TAC NGHEN!", (0, 0, 255) 
+        occupancy_percent = min(100.0, (self.total_vehicle_area / self.roi_area) * 100.0) if self.roi_area > 0 else 0.0
+
+        is_high_count = (self.vehicle_count >= CONG_COUNT_THR) or (self.people_count >= CONG_PEOPLE_THR)
+
+        if not is_high_count and occupancy_percent < CONG_AREA_PERCENT_THR:
+            traffic_level = 0
+            status_text, status_color = "Trang thai: Thong thoang (MUC 0)", (0, 255, 0)
+        elif is_high_count and occupancy_percent < CONG_AREA_PERCENT_THR:
+            traffic_level = 1
+            if self.vehicle_count >= CONG_COUNT_THR:
+                status_text, status_color = f"Trang thai: Dong duc (MUC 1) - {self.vehicle_count} xe", (0, 165, 255)
             else:
-                traffic_level = 1
-                status_text, status_color = "Trang thai: Dong duc", (0, 165, 255) 
+                status_text, status_color = f"Trang thai: Dong duc (MUC 1) - {self.people_count} nguoi", (0, 165, 255)
+        elif occupancy_percent >= CONG_AREA_PERCENT_THR and avg_speed > CONG_SPEED_THR:
+            traffic_level = 2
+            status_text, status_color = f"Trang thai: Rat dong (MUC 2) - {occupancy_percent:.1f}% dien tich", (0, 100, 255)
+        elif occupancy_percent >= CONG_AREA_PERCENT_THR and avg_speed <= CONG_SPEED_THR:
+            traffic_level = 3
+            status_text, status_color = f"Trang thai: TAC NGHEN (MUC 3) - {avg_speed:.1f} px/s", (0, 0, 255)
         else:
             traffic_level = 0
-            status_text, status_color = "Trang thai: Thong thoang", (0, 255, 0)
+            status_text, status_color = "Trang thai: Thong thoang (MUC 0)", (0, 255, 0)
             
         return avg_speed, status_text, status_color, traffic_level
 
     def draw_status(self, frame, avg_speed, status_text, status_color):
-        cv2.putText(frame, f"Vehicles: {self.vehicle_count}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        cv2.putText(frame, f"Avg Speed: {int(avg_speed)} px/s", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        cv2.putText(frame, status_text, (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+        occupancy_percent = min(100.0, (self.total_vehicle_area / self.roi_area) * 100.0) if self.roi_area > 0 else 0.0
+        cv2.putText(frame, f"Vehicles: {self.vehicle_count} | People: {self.people_count}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(frame, f"Occupancy: {occupancy_percent:.1f}%", (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(frame, f"Avg Speed: {int(avg_speed)} px/s", (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(frame, status_text, (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2)
