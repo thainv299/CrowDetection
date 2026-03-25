@@ -14,9 +14,9 @@ from collections import deque
 from modules.parking.parking_manager import ParkingManager
 from modules.ocr.ocr_manager import OCRManager
 from modules.traffic.traffic_monitor import TrafficMonitor
-from modules.alpr_logger import ALPRLogger
-from modules.traffic_alert_manager import TrafficAlertManager
-from modules.interactive_telegram_bot import start_bot_thread
+from modules.utils.alpr_logger import ALPRLogger
+from modules.utils.traffic_alert_manager import TrafficAlertManager
+from modules.utils.interactive_telegram_bot import start_bot_thread
 
 class_names = {
     0: "Person", 1: "Bicycle", 2: "Car", 3: "Motorcycle", 

@@ -1,7 +1,7 @@
 import time
 import os
 import cv2
-from modules.interactive_telegram_bot import send_alert_with_button
+from modules.utils.interactive_telegram_bot import send_alert_with_button
 
 class TrafficAlertManager:
     def __init__(self):
