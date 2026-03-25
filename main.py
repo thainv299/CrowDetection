@@ -279,8 +279,7 @@ class App:
                                 cv2.putText(frame, f"ID:{track_id} person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
                                 
                             elif label in ["car", "motorcycle", "bus", "truck"]:
-                                area = (x2 - x1) * (y2 - y1)
-                                traffic_monitor.log_vehicle(track_id, cx, cy, current_time, area=area)
+                                traffic_monitor.log_vehicle(track_id, cx, cy, current_time, bbox=(x1, y1, x2, y2))
                                 if track_id != -1:
                                     state_display_label, state_box_color = self.parking_manager.process_vehicle(
                                         frame, track_id, label, cx, cy, frame_count
@@ -306,7 +305,7 @@ class App:
                     self.ocr_manager.draw_grace_period_boxes(frame, current_plate_ids)
                     self.ocr_manager.cleanup_memory(current_time, frame_count)
 
-                avg_speed, status_text, status_color, traffic_level = traffic_monitor.calculate_speed_and_status(current_time)
+                avg_speed, status_text, status_color, traffic_level = traffic_monitor.calculate_speed_and_status(current_time, frame.shape)
                 self.traffic_alert_manager.update_traffic_state(traffic_level, clean_frame, "", "")
 
                 cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
