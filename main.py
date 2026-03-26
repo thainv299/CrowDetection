@@ -306,7 +306,7 @@ class App:
                     self.ocr_manager.cleanup_memory(current_time, frame_count)
 
                 avg_speed, status_text, status_color, traffic_level = traffic_monitor.calculate_speed_and_status(current_time, frame.shape)
-                self.traffic_alert_manager.update_traffic_state(traffic_level, clean_frame, "", "")
+                self.traffic_alert_manager.update_traffic_state(traffic_level, clean_frame)
 
                 cv2.polylines(frame, [self.roi_polygon], True, (255, 0, 0), 2)
                 self.parking_manager.draw_polygon_overlay(frame)

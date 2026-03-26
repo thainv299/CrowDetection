@@ -12,13 +12,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 alert_manager_ref = None
 
-def send_alert_with_button(img_path, caption):
+def send_alert_with_button(img_path, caption, level):
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
         print("[Telegram Bot] Không thể gửi cảnh báo: Token hoặc Chat ID chưa được thiết lập.")
         return
         
     markup = InlineKeyboardMarkup()
-    btn = InlineKeyboardButton(text="✅ Xác nhận (Acknowledge)", callback_data="ack_alert")
+    btn = InlineKeyboardButton(text="✅ Xác nhận (Acknowledge)", callback_data=f"ack_alert_{level}")
     markup.add(btn)
     
     try:
@@ -27,13 +27,17 @@ def send_alert_with_button(img_path, caption):
     except Exception as e:
         print(f"[Telegram Bot] Lỗi khi gửi ảnh lên Telegram: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data == 'ack_alert')
+@bot.callback_query_handler(func=lambda call: call.data.startswith('ack_alert_'))
 def ack_alert_callback(call):
     global alert_manager_ref
-    if alert_manager_ref is not None:
-        alert_manager_ref.acknowledge_alert()
-        
+    
     try:
+        acked_level = int(call.data.split('_')[-1])
+        message_send_time = call.message.date  # Unix timestamp from Telegram
+        
+        if alert_manager_ref is not None:
+            alert_manager_ref.user_feedback_received(acked_level, message_send_time)
+            
         # Sửa tin nhắn gốc để xóa nút bấm và thêm trạng thái xác nhận
         new_caption = (call.message.caption or "") + "\n\n🟢 ĐÃ XÁC NHẬN (Snoozed)"
         bot.edit_message_caption(caption=new_caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
@@ -41,7 +45,7 @@ def ack_alert_callback(call):
         # Trả lời lại callback query để dừng hiệu ứng vòng chờ loading trên app
         bot.answer_callback_query(call.id, "Đã xác nhận cảnh báo!")
     except Exception as e:
-        print(f"[Telegram Bot] Lỗi khi cập nhật trạng thái tin nhắn gốc: {e}")
+        print(f"[Telegram Bot] Lỗi khi xử lý callback từ Telegram: {e}")
 
 def start_bot_thread(manager_instance):
     global alert_manager_ref
