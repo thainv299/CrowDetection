@@ -6,6 +6,7 @@ CONG_COUNT_THR = 10              # Level 1: Min vehicles to be considered "Crowd
 CONG_PEOPLE_THR = 30             # Level 1: Min people to be considered "Crowded L1"
 CONG_AREA_PERCENT_THR = 40.0     # Level 2: Min ROI area % covered by vehicles to be "Crowded L2"
 CONG_SPEED_THR = 10.0            # Level 3: Max speed (px/s) to be considered "Congested"
+MAX_VEHICLE_AREA_RATIO = 0.3     # Ignore glitch objects larger than 30% of ROI area
 
 class TrafficMonitor:
     def __init__(self, roi_polygon=None):
@@ -32,7 +33,13 @@ class TrafficMonitor:
         """bbox truyền vào dưới dạng tuple (x1, y1, x2, y2)"""
         self.vehicle_count += 1
         if bbox is not None:
-            self.current_bboxes.append(bbox)
+            # Lọc nhiễu: Bỏ qua bounding box lớn dị thường (lỗi YOLO) > 30% diện tích ROI
+            if self.roi_area > 0:
+                area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+                if area <= (self.roi_area * MAX_VEHICLE_AREA_RATIO):
+                    self.current_bboxes.append(bbox)
+            else:
+                self.current_bboxes.append(bbox)
             
         if track_id != -1:
             self.current_ids_in_roi.append(track_id)
