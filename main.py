@@ -282,7 +282,7 @@ class App:
                                 traffic_monitor.log_vehicle(track_id, cx, cy, current_time, bbox=(x1, y1, x2, y2))
                                 if track_id != -1:
                                     state_display_label, state_box_color = self.parking_manager.process_vehicle(
-                                        frame, track_id, label, cx, cy, frame_count
+                                        frame, clean_frame, track_id, label, cx, cy, frame_count
                                     )
                                     
                                     display_label = state_display_label if state_display_label else f"ID:{track_id} {label}"

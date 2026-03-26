@@ -5,7 +5,9 @@ import json
 import tkinter as tk
 from tkinter import filedialog
 from collections import deque
-from .parking_logic import ViolationLogic, MOVING, STOPPED, PARKED
+import threading
+import datetime
+from .parking_logic import ViolationLogic, MOVING, WAITING, VIOLATION, RECORDING_DONE
 from modules.utils.telegram_bot import send_telegram_image, send_telegram_video
 from modules.utils.common_utils import ensure_dir, now_ts
 
@@ -15,11 +17,11 @@ class ParkingManager:
         self.app = app_instance
         self.no_park_polygon = None
         
-        # --- ILLEGAL PARKING CONFIGS ---
+        # --- CẤU HÌNH ĐỖ XE TRÁI PHÉP ---
         self.stop_seconds = 30
         self.move_thr_px = 10.0
         self.cooldown_seconds = 30.0
-        self.telegram_enabled = False
+        self.telegram_enabled = True
         self.save_violation_frames = True
         self.telegram_bot_token = ""
         self.telegram_chat_id = ""
@@ -27,6 +29,8 @@ class ParkingManager:
         self.logic = None
         self.frame_buffer = None
         self.fps = 30.0
+        self.active_recordings = {}
+        self.waiting_vehicles = {}
 
     def init_ui(self):
         self.frame_no_park = tk.LabelFrame(self.root, text="3. Quản lý Vùng Cấm Đỗ", font=("Arial", 11, "bold"))
@@ -84,26 +88,86 @@ class ParkingManager:
         ensure_dir("logs/violations")
         self.logic = ViolationLogic(self.stop_seconds, self.move_thr_px, self.cooldown_seconds, fps=fps)
         self.frame_buffer = deque(maxlen=int(5 * fps))
+        self.active_recordings = {}
+        self.waiting_vehicles = {}
 
     def update_buffer(self, frame_copy):
         if self.frame_buffer is not None:
             self.frame_buffer.append(frame_copy)
+            
+            to_delete = []
+            for track_id, record_data in self.active_recordings.items():
+                record_data['frames'].append(frame_copy.copy())
+                record_data['frames_needed'] -= 1
+                if record_data['frames_needed'] <= 0:
+                    threading.Thread(target=self._save_evidence_and_notify_thread, args=(track_id, record_data), daemon=True).start()
+                    self.logic.set_recording_done(track_id)
+                    to_delete.append(track_id)
+                    
+            for tid in to_delete:
+                del self.active_recordings[tid]
 
-    def save_violation_video(self, ts, track_id):
-        if not self.frame_buffer: return ""
-        video_dir = os.path.join("logs", "violations")
-        ensure_dir(video_dir)
-        video_path = os.path.join(video_dir, f"violation_{track_id}_{ts}.mp4")
-        first_frame = self.frame_buffer[0]
-        h, w = first_frame.shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(video_path, fourcc, self.fps, (w, h))
-        for f in self.frame_buffer:
-            out.write(f)
-        out.release()
-        return video_path
+    def _send_warning_thread(self, img_t0, caption):
+        img_path = os.path.join("logs", "violations", f"temp_warning_{now_ts()}.jpg")
+        cv2.imwrite(img_path, img_t0)
+        send_telegram_image(img_path, caption, self.telegram_bot_token, self.telegram_chat_id)
+        try: os.remove(img_path)
+        except: pass
 
-    def process_vehicle(self, frame, track_id, label, cx, cy, frame_count):
+    def _save_evidence_and_notify_thread(self, track_id, data):
+        evt_id = f"EVT_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{track_id}"
+        plate_folder = data.get('plate', f"ID_{track_id}")
+        save_dir = os.path.join("logs", "violations", plate_folder, evt_id)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        img_t0_path = os.path.join(save_dir, "img_T0.jpg")
+        img_t1_path = os.path.join(save_dir, "img_T1.jpg")
+        combined_path = os.path.join(save_dir, "combined_alert.jpg")
+        video_path = os.path.join(save_dir, "video_record.mp4")
+        json_path = os.path.join(save_dir, "evidence.json")
+        
+        cv2.imwrite(img_t0_path, data['img_t0'])
+        cv2.imwrite(img_t1_path, data['img_t1'])
+        
+        # Ghép ảnh thông báo nguyên khối (T0 + T1)
+        h1, w1 = data['img_t0'].shape[:2]
+        h2, w2 = data['img_t1'].shape[:2]
+        target_w = max(w1, w2)
+        img1 = cv2.resize(data['img_t0'], (target_w, int(h1 * target_w / w1)))
+        img2 = cv2.resize(data['img_t1'], (target_w, int(h2 * target_w / w2)))
+        cv2.putText(img1, "T0: Bat dau do", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        cv2.putText(img2, "T1: Vi pham", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        combined = np.vstack((img1, img2))
+        cv2.putText(combined, f"PLATE: {plate_folder}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        cv2.imwrite(combined_path, combined)
+        
+        # Lưu video bằng chứng
+        if data['frames']:
+            fh, fw = data['frames'][0].shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(video_path, fourcc, self.fps, (fw, fh))
+            for f in data['frames']:
+                out.write(f)
+            out.release()
+            
+        # Lưu file Metadata JSON
+        meta = {
+            "track_id": track_id,
+            "plate": plate_folder,
+            "label": data.get('label', ''),
+            "start_time": data.get('start_time', datetime.datetime.now()).strftime('%Y-%m-%d %H:%M:%S'),
+            "violation_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        with open(json_path, 'w', encoding='utf-8') as jf:
+            json.dump(meta, jf, indent=4)
+            
+        if self.telegram_enabled:
+            caption_img = f"🚨 VI PHẠM CHỐT: Xe {plate_folder} đỗ sai quy định."
+            send_telegram_image(combined_path, caption_img, self.telegram_bot_token, self.telegram_chat_id)
+            caption_vid = f"Bằng chứng Video 15s cho xe {plate_folder}"
+            send_telegram_video(video_path, caption_vid, self.telegram_bot_token, self.telegram_chat_id)
+
+    def process_vehicle(self, frame, clean_frame, track_id, label, cx, cy, frame_count):
         """Kiểm tra và cập nhật trạng thái đỗ xe, trả về display_label và box_color mới (nếu có)"""
         if self.logic is None:
             return None, None
@@ -113,37 +177,48 @@ class ParkingManager:
             in_no_park = cv2.pointPolygonTest(self.no_park_polygon, (cx, cy), False) >= 0
 
         if in_no_park:
-            still_time = self.logic.update(track_id, (cx, cy), frame_count)
-            veh_state = self.logic.get_vehicle_state(track_id)
+            state, just_changed = self.logic.update(track_id, (cx, cy), frame_count)
             
-            if veh_state == PARKED:
-                box_color = (0, 0, 255) # Đỏ
-            elif veh_state == STOPPED:
-                box_color = (0, 165, 255) # Cam
+            if state == WAITING:
+                box_color = (0, 165, 255) # Orange
+                state_str = "WAITING"
+                if just_changed:
+                    img_t0 = clean_frame.copy()
+                    self.waiting_vehicles[track_id] = {'img_t0': img_t0, 'start_time': datetime.datetime.now()}
+                    if self.telegram_enabled:
+                        caption = f"⚠️ CẢNH BÁO: Xe ID {track_id} bắt đầu đỗ tại vùng cấm. Đang đếm giờ..."
+                        threading.Thread(target=self._send_warning_thread, args=(img_t0, caption), daemon=True).start()
+                        
+            elif state == VIOLATION:
+                box_color = (0, 0, 255) # Red
+                state_str = "VIOLATION"
+                if just_changed:
+                    waiting_data = self.waiting_vehicles.get(track_id, {})
+                    img_t0 = waiting_data.get('img_t0', clean_frame.copy())
+                    start_time = waiting_data.get('start_time', datetime.datetime.now())
+                    
+                    self.active_recordings[track_id] = {
+                        'frames': list(self.frame_buffer),
+                        'frames_needed': int(10 * self.fps),
+                        'img_t0': img_t0,
+                        'img_t1': clean_frame.copy(),
+                        'plate': f"ID_{track_id}",
+                        'start_time': start_time,
+                        'label': label
+                    }
+                    
+                    h, w = frame.shape[:2]
+                    cv2.rectangle(frame, (0, 0), (w, 80), (0, 0, 0), -1)
+                    cv2.putText(frame, "VI PHAM: DO XE SAI QUY DINH!", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
+                    
+            elif state == RECORDING_DONE:
+                box_color = (0, 0, 255)
+                state_str = "RECORDED"
             else:
                 box_color = None
+                state_str = "MOVING"
                 
-            state_str = "PARKED" if veh_state == PARKED else ("STOPPED" if veh_state == STOPPED else "MOVING")
-            display_label = f"ID:{track_id} {label} {state_str} {still_time:.1f}s"
-            
-            if self.logic.should_flag_violation(track_id, frame_count, in_no_park=in_no_park):
-                h, w = frame.shape[:2]
-                cv2.rectangle(frame, (0, 0), (w, 80), (0, 0, 0), -1)
-                cv2.putText(frame, "VI PHAM: DO XE SAI QUY DINH!", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
-                
-                ts = now_ts()
-                if self.save_violation_frames:
-                    img_path = os.path.join("logs", "violations", f"violation_{track_id}_{ts}.jpg")
-                    cv2.imwrite(img_path, frame)
-                    if self.telegram_enabled:
-                        caption = f"XE ĐỖ SAI QUY ĐỊNH\nID xe: {track_id}\nLoại xe: {label}\nThời gian đứng: {still_time:.1f}s"
-                        send_telegram_image(img_path, caption, self.telegram_bot_token, self.telegram_chat_id)
-                
-                if self.frame_buffer:
-                    video_path = self.save_violation_video(ts, track_id)
-                    if self.telegram_enabled and video_path:
-                        video_caption = f"VIDEO VI PHẠM ĐỖ XE\nID xe: {track_id}\nLoại xe: {label}\nThời gian đứng: {still_time:.1f}s"
-                        send_telegram_video(video_path, video_caption, self.telegram_bot_token, self.telegram_chat_id)
+            display_label = f"ID:{track_id} {label} {state_str}"
             return display_label, box_color
         return None, None
 

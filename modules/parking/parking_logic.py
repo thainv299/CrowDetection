@@ -2,124 +2,84 @@ from __future__ import annotations
 import math
 from typing import Dict, Tuple
 
-# ── Trạng thái xe ────────────────────────────────────────────────────────────
-MOVING  = "moving"   # đang chạy  – dịch chuyển > nguong_di_chuyen
-STOPPED = "stopped"  # đang dừng  – đứng yên nhưng < nguong_do_xe
-PARKED  = "parked"   # đỗ xe      – đứng yên >= nguong_do_xe → vi phạm
-
-
-def dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
-
+# CÁC TRẠNG THÁI (STATES)
+MOVING = 0          # Đang di chuyển
+WAITING = 1         # Đang dừng chờ
+VIOLATION = 2       # Vi phạm đỗ xe
+RECORDING_DONE = 3  # Đã ghi hình xong
 
 class ViolationLogic:
-    """
-    Quản lý trạng thái từng xe theo track_id:
-      MOVING  →  STOPPED  →  PARKED
-    Thời gian đứng yên tính theo SỐ FRAME (không dùng time.time())
-    để đảm bảo chính xác bất kể tốc độ xử lý của máy.
-    """
+    def __init__(self, stop_seconds: float, move_thr_px: float, cooldown_seconds: float, fps: float = 21.0):
+        self.move_thr_px = float(move_thr_px)
+        self.stop_frames = int(stop_seconds * fps)
+        self.fps = float(fps)
+        self.states: Dict[int, Dict] = {}
 
-    def __init__(
-        self,
-        stop_seconds: float,
-        move_thr_px: float,
-        cooldown_seconds: float,
-        fps: float = 21.0,
-    ):
-        self.move_thr_px  = float(move_thr_px)
-
-        # Đổi ngưỡng giây → số frame
-        self.nguong_do_xe_frame    = int(stop_seconds    * fps)
-        self.nguong_cooldown_frame = int(cooldown_seconds * fps)
-        self.fps                   = float(fps)
-
-        # track_id → dict trạng thái
-        self.trang_thai: Dict[int, Dict] = {}
-
-    # ─────────────────────────────────────────────────────────────────────────
-    def update(
-        self,
-        track_id: int,
-        center: Tuple[float, float],
-        so_frame: int,
-    ) -> float:
+    def update(self, track_id: int, center: Tuple[float, float], so_frame: int) -> Tuple[int, bool]:
         """
-        Cập nhật vị trí xe theo frame hiện tại.
-
-        Parameters
-        ----------
-        track_id : int   – ID xe từ tracker
-        center   : tuple – tâm bbox (x, y)
-        so_frame : int   – số thứ tự frame hiện tại
-
-        Returns
-        -------
-        thoi_gian_dung_yen : float – số giây xe đứng yên (quy từ frame)
+        Trả về (trạng_thái_hiện_tại, trạng_thái_vừa_thay_đổi)
         """
-
-        # ── Lần đầu gặp xe này ──────────────────────────────────────────────
-        if track_id not in self.trang_thai:
-            self.trang_thai[track_id] = {
-                "vi_tri_cuoi":          center,
-                "dung_tu_frame":        so_frame,
-                "last_violation_frame": 0,
-                "vehicle_state":        MOVING,
+        if track_id not in self.states:
+            self.states[track_id] = {
+                "history": [center],
+                "state": MOVING,
+                "waiting_start_frame": -1,
+                "grace_count": 0
             }
-            return 0.0
+            return (MOVING, False)
 
-        # ── Tính khoảng cách tâm bbox 2 frame liên tiếp ─────────────────────
-        vi_tri_cuoi = self.trang_thai[track_id]["vi_tri_cuoi"]
-        khoang_cach = dist(center, vi_tri_cuoi)
-
-        if khoang_cach > self.move_thr_px:
-            # Xe di chuyển → reset bộ đếm frame đứng yên
-            self.trang_thai[track_id]["dung_tu_frame"] = so_frame
-            self.trang_thai[track_id]["vehicle_state"] = MOVING
-
-        self.trang_thai[track_id]["vi_tri_cuoi"] = center
-
-        # ── Số frame đứng yên → đổi ra giây ─────────────────────────────────
-        so_frame_dung_yen  = so_frame - self.trang_thai[track_id]["dung_tu_frame"]
-        thoi_gian_dung_yen = so_frame_dung_yen / self.fps
-
-        # ── Cập nhật trạng thái ──────────────────────────────────────────────
-        if khoang_cach > self.move_thr_px:
-            self.trang_thai[track_id]["vehicle_state"] = MOVING
-        elif so_frame_dung_yen < self.nguong_do_xe_frame:
-            self.trang_thai[track_id]["vehicle_state"] = STOPPED
+        car_data = self.states[track_id]
+        
+        # Thêm vào lịch sử và giữ 10 vị trí gần nhất để tính trung bình di chuyển
+        car_data["history"].append(center)
+        if len(car_data["history"]) > 10:
+            car_data["history"].pop(0)
+            
+        # Tính tốc độ (khoảng cách trung bình dựa trên lịch sử)
+        if len(car_data["history"]) >= 2:
+            dx = car_data["history"][-1][0] - car_data["history"][0][0]
+            dy = car_data["history"][-1][1] - car_data["history"][0][1]
+            avg_speed = math.hypot(dx, dy) / len(car_data["history"])
         else:
-            self.trang_thai[track_id]["vehicle_state"] = PARKED
+            avg_speed = 0.0
 
-        return thoi_gian_dung_yen
+        current_state = car_data["state"]
+        next_state = current_state
+        state_just_changed = False
 
-    # ─────────────────────────────────────────────────────────────────────────
-    def should_flag_violation(
-        self,
-        track_id: int,
-        so_frame: int,
-        in_no_park: bool,
-    ) -> bool:
-        """
-        Trả về True chỉ khi:
-          1. Xe nằm trong vùng cấm đỗ.
-          2. Xe đã ở trạng thái PARKED.
-          3. Đã hết cooldown (tính theo frame).
-        """
-        if not in_no_park:
-            return False
+        if current_state == RECORDING_DONE:
+            # Trạng thái kết thúc cho chuỗi xử lý của chiếc xe này
+            return (RECORDING_DONE, False)
 
-        if self.trang_thai.get(track_id, {}).get("vehicle_state") != PARKED:
-            return False
+        elif current_state == MOVING:
+            if avg_speed < self.move_thr_px:
+                next_state = WAITING
+                car_data["waiting_start_frame"] = so_frame
+                car_data["grace_count"] = 0
+                state_just_changed = True
 
-        last_vio_frame = self.trang_thai.get(track_id, {}).get("last_violation_frame", 0)
-        if so_frame - last_vio_frame < self.nguong_cooldown_frame:
-            return False
+        elif current_state == WAITING:
+            frames_waited = so_frame - car_data["waiting_start_frame"]
+            
+            if avg_speed >= self.move_thr_px:
+                car_data["grace_count"] += 1
+                if car_data["grace_count"] > 10: # Vượt quá 10 frame ân hạn (xe đã thực sự di chuyển)
+                    next_state = MOVING
+                    state_just_changed = True
+            else:
+                car_data["grace_count"] = 0 # Đặt lại ân hạn nếu xe đi chậm lại
+                
+            if next_state == WAITING and frames_waited >= self.stop_frames:
+                next_state = VIOLATION
+                state_just_changed = True
 
-        self.trang_thai[track_id]["last_violation_frame"] = so_frame
-        return True
+        elif current_state == VIOLATION:
+            # Đã ở trạng thái VI PHẠM, manager sẽ thu thập video 10s rồi tự gọi set_recording_done
+            pass
 
-    # ─────────────────────────────────────────────────────────────────────────
-    def get_vehicle_state(self, track_id: int) -> str:
-        """Trả về trạng thái hiện tại: 'moving' | 'stopped' | 'parked'."""
-        return self.trang_thai.get(track_id, {}).get("vehicle_state", MOVING)
+        car_data["state"] = next_state
+        return (next_state, state_just_changed)
+        
+    def set_recording_done(self, track_id: int):
+        if track_id in self.states:
+            self.states[track_id]["state"] = RECORDING_DONE

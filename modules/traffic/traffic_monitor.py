@@ -1,16 +1,17 @@
 import numpy as np
 import cv2
 
-# --- CONGESTION THRESHOLDS ---
-CONG_COUNT_THR = 10              # Level 1: Min vehicles to be considered "Crowded L1"
-CONG_PEOPLE_THR = 30             # Level 1: Min people to be considered "Crowded L1"
-CONG_AREA_PERCENT_THR = 40.0     # Level 2: Min ROI area % covered by vehicles to be "Crowded L2"
-CONG_SPEED_THR = 10.0            # Level 3: Max speed (px/s) to be considered "Congested"
-MAX_VEHICLE_AREA_RATIO = 0.3     # Ignore glitch objects larger than 30% of ROI area
+# --- NGƯỠNG CẢNH BÁO GIAO THÔNG (CONGESTION THRESHOLDS) ---
+CONG_COUNT_THR = 10              # Cấp 1: Số xe tối thiểu để được coi là "Đông đúc L1"
+CONG_PEOPLE_THR = 30             # Cấp 1: Số người tối thiểu để được coi là "Đông đúc L1"
+CONG_AREA_PERCENT_THR = 40.0     # Cấp 2: % Diện tích vùng giám sát tối thiểu bị lấp đầy để coi là "Rất đông L2"
+CONG_SPEED_THR = 10.0            # Cấp 3: Vận tốc di chuyển tối đa (px/s) để bị coi là "Tắc nghẽn L3"
+MAX_VEHICLE_AREA_RATIO = 0.3     # Bỏ qua những hộp Box nhiễu có diện tích lớn hơn 30% vùng giám sát (Tránh lỗi YOLO)
 
 class TrafficMonitor:
     def __init__(self, roi_polygon=None):
         self.roi_polygon = roi_polygon
+        self.roi_area = cv2.contourArea(np.array(self.roi_polygon)) if self.roi_polygon is not None else 0.0
         self.track_history = {}
         self.vehicle_count = 0
         self.people_count = 0

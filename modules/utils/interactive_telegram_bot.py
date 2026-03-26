@@ -14,7 +14,7 @@ alert_manager_ref = None
 
 def send_alert_with_button(img_path, caption):
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
-        print("[Telegram Bot] Cannot send alert: Token or Chat ID not configured.")
+        print("[Telegram Bot] Không thể gửi cảnh báo: Token hoặc Chat ID chưa được thiết lập.")
         return
         
     markup = InlineKeyboardMarkup()
@@ -25,7 +25,7 @@ def send_alert_with_button(img_path, caption):
         with open(img_path, "rb") as photo:
             bot.send_photo(TELEGRAM_CHAT_ID, photo, caption=caption, reply_markup=markup)
     except Exception as e:
-        print(f"[Telegram Bot] Error sending photo: {e}")
+        print(f"[Telegram Bot] Lỗi khi gửi ảnh lên Telegram: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == 'ack_alert')
 def ack_alert_callback(call):
@@ -34,23 +34,23 @@ def ack_alert_callback(call):
         alert_manager_ref.acknowledge_alert()
         
     try:
-        # Edit the original message to remove the button and append "Snoozed"
+        # Sửa tin nhắn gốc để xóa nút bấm và thêm trạng thái xác nhận
         new_caption = (call.message.caption or "") + "\n\n🟢 ĐÃ XÁC NHẬN (Snoozed)"
         bot.edit_message_caption(caption=new_caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
         
-        # Answer the callback query to stop the loading spinner
+        # Trả lời lại callback query để dừng hiệu ứng vòng chờ loading trên app
         bot.answer_callback_query(call.id, "Đã xác nhận cảnh báo!")
     except Exception as e:
-        print(f"[Telegram Bot] Error updating message: {e}")
+        print(f"[Telegram Bot] Lỗi khi cập nhật trạng thái tin nhắn gốc: {e}")
 
 def start_bot_thread(manager_instance):
     global alert_manager_ref
     alert_manager_ref = manager_instance
     
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("[Telegram Bot] Token not set. Polling thread will not start.")
+        print("[Telegram Bot] Token chưa cài đặt. Luồng chờ tin nhắn sẽ không được khởi động.")
         return
         
     polling_thread = threading.Thread(target=bot.infinity_polling, daemon=True)
     polling_thread.start()
-    print("[Telegram Bot] Interactive bot polling thread started.")
+    print("[Telegram Bot] Luồng kết nối trực tiếp BOT Telegram đã khởi động thành công.")
