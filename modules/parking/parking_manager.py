@@ -171,6 +171,10 @@ class ParkingManager:
         """Kiểm tra và cập nhật trạng thái đỗ xe, trả về display_label và box_color mới (nếu có)"""
         if self.logic is None:
             return None, None
+            
+        # Bỏ qua xe máy, xe đạp và người đi bộ (không xét lỗi đỗ trái phép)
+        if label in ["motorcycle", "bicycle", "person"]:
+            return None, None
 
         in_no_park = False
         if self.no_park_polygon is not None:
