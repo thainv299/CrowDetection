@@ -6,7 +6,7 @@ from modules.utils.interactive_telegram_bot import send_alert_with_button
 class TrafficAlertManager:
     def __init__(self):
         # Cấu hình thời gian đếm ngược tĩnh (giây)
-        self.DEBOUNCE_SECONDS = 3.0
+        self.DEBOUNCE_SECONDS = 1.0
         self.INTERVAL_UNACK = {1: 300, 2: 60, 3: 30}
         self.SNOOZE_ACK = {1: 900, 2: 600, 3: 300}
         
@@ -16,6 +16,7 @@ class TrafficAlertManager:
         self.confirmed_level = 0
         self.last_alert_level = 0
         self.snooze_until = 0
+        self.is_acknowledged = False
         
         # Đảm bảo thư mục lưu log tồn tại
         os.makedirs("logs", exist_ok=True)
@@ -44,10 +45,12 @@ class TrafficAlertManager:
             self.last_alert_level = self.confirmed_level
             # Kích hoạt trạng thái Un-Acked với thời gian ngắn
             self.snooze_until = current_time + self.INTERVAL_UNACK.get(self.confirmed_level, 60)
+            self.is_acknowledged = False # Đặt lại cờ chưa xác nhận khi có cảnh báo mới phát ra
 
     def acknowledge_alert(self):
         """User clicked ACK button on Telegram or pressed 'A' on keyboard"""
         self.snooze_until = time.time() + self.SNOOZE_ACK.get(self.confirmed_level, 300)
+        self.is_acknowledged = True
         print(f"[INFO] Người dùng đã xác nhận Cảnh báo. Hệ thống tạm chuyển sang chế độ Ngủ đông (Snooze) cho mức độ <= {self.confirmed_level}.")
 
     def _trigger_alert(self, level, frame, bot_token, chat_id):
