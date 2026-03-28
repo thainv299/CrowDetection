@@ -18,7 +18,7 @@ def send_alert_with_button(img_path, caption, level):
         return
         
     markup = InlineKeyboardMarkup()
-    btn = InlineKeyboardButton(text="✅ Xác nhận (Acknowledge)", callback_data=f"ack_alert_{level}")
+    btn = InlineKeyboardButton(text="Xác nhận ✅", callback_data=f"ack_alert_{level}")
     markup.add(btn)
     
     try:
@@ -39,7 +39,7 @@ def ack_alert_callback(call):
             alert_manager_ref.user_feedback_received(acked_level, message_send_time)
             
         # Sửa tin nhắn gốc để xóa nút bấm và thêm trạng thái xác nhận
-        new_caption = (call.message.caption or "") + "\n\n🟢 ĐÃ XÁC NHẬN (Snoozed)"
+        new_caption = (call.message.caption or "") + "\n\n ĐÃ XÁC NHẬN 🟢 "
         bot.edit_message_caption(caption=new_caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
         
         # Trả lời lại callback query để dừng hiệu ứng vòng chờ loading trên app

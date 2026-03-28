@@ -86,11 +86,11 @@ class TrafficAlertManager:
         
         caption = ""
         if level == 1:
-            caption = "⚠️ CẢNH BÁO: Giao thông đang Bắt Đầu Đông (Mức 1)."
+            caption = "CẢNH BÁO ⚠️: Giao thông đang Bắt Đầu Đông (Mức 1)."
         elif level == 2:
-            caption = "⚠️ CẢNH BÁO: Giao thông đang RẤT ĐÔNG (Mức 2)."
+            caption = "CẢNH BÁO ⚠️: Giao thông đang RẤT ĐÔNG (Mức 2)."
         elif level == 3:
-            caption = "🚨 BÁO ĐỘNG: TẮC NGHẼN nghiêm trọng (Mức 3)!"
+            caption = "BÁO ĐỘNG 🚨: TẮC NGHẼN nghiêm trọng (Mức 3)!"
             
         # Gửi sang Bot Telegram có đính kèm Nút nhấn tương tác
         send_alert_with_button(img_path, caption, level)
