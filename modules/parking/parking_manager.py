@@ -171,7 +171,7 @@ class ParkingManager:
             caption_vid = f"Bằng chứng Video 15s cho xe {plate_folder}"
             send_telegram_video(video_path, caption_vid, self.telegram_bot_token, self.telegram_chat_id)
 
-    def process_vehicle(self, frame, clean_frame, track_id, label, cx, cy, frame_count):
+    def process_vehicle(self, frame, clean_frame, track_id, label, cx, cy, frame_count, bbox=None):
         """Kiểm tra và cập nhật trạng thái đỗ xe, trả về display_label và box_color mới (nếu có)"""
         if self.logic is None:
             return None, None
@@ -220,7 +220,6 @@ class ParkingManager:
                     self.logic.states[track_id] = ginfo['logic_state']
                 if 'waiting_data' in ginfo:
                     self.waiting_vehicles[track_id] = ginfo['waiting_data']
-                print(f"[RE-ID] Bù đắp Track vỡ: Đã nối mã gốc {best_match} vào mã mới {track_id} (Khoảng cách lệch: {min_dist:.1f}px)")
 
         # Cập nhật vị trí và dấu thời gian hiện tại
         self.last_seen[track_id] = {'cx': cx, 'cy': cy, 'last_time': current_time}
@@ -237,6 +236,11 @@ class ParkingManager:
                 state_str = "WAITING"
                 if just_changed:
                     img_t0 = clean_frame.copy()
+                    if bbox is not None:
+                        x1, y1, x2, y2 = bbox
+                        cv2.rectangle(img_t0, (x1, y1), (x2, y2), box_color, 3)
+                        cv2.putText(img_t0, f"{label.upper()} {track_id} - BAT DAU DO", (x1, max(0, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
+                        
                     self.waiting_vehicles[track_id] = {'img_t0': img_t0, 'start_time': datetime.datetime.now()}
                     if self.telegram_enabled:
                         caption = f"⚠️ CẢNH BÁO: Xe ID {track_id} bắt đầu đỗ tại vùng cấm. Đang đếm giờ..."
@@ -250,11 +254,17 @@ class ParkingManager:
                     img_t0 = waiting_data.get('img_t0', clean_frame.copy())
                     start_time = waiting_data.get('start_time', datetime.datetime.now())
                     
+                    img_t1 = clean_frame.copy()
+                    if bbox is not None:
+                        x1, y1, x2, y2 = bbox
+                        cv2.rectangle(img_t1, (x1, y1), (x2, y2), box_color, 4)
+                        cv2.putText(img_t1, f"{label.upper()} {track_id} - VI PHAM!", (x1, max(0, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 3)
+                        
                     self.active_recordings[track_id] = {
                         'frames': list(self.frame_buffer),
                         'frames_needed': int(10 * self.fps),
                         'img_t0': img_t0,
-                        'img_t1': clean_frame.copy(),
+                        'img_t1': img_t1,
                         'plate': f"ID_{track_id}",
                         'start_time': start_time,
                         'label': label
