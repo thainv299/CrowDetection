@@ -7,6 +7,8 @@ from tkinter import filedialog
 from collections import deque
 import threading
 import datetime
+import time
+import math
 from .parking_logic import ViolationLogic, MOVING, WAITING, VIOLATION, RECORDING_DONE
 from modules.utils.telegram_bot import send_telegram_image, send_telegram_video
 from modules.utils.common_utils import ensure_dir, now_ts
@@ -90,6 +92,8 @@ class ParkingManager:
         self.frame_buffer = deque(maxlen=int(5 * fps))
         self.active_recordings = {}
         self.waiting_vehicles = {}
+        self.ghost_tracks = {}
+        self.last_seen = {}
 
     def update_buffer(self, frame_copy):
         if self.frame_buffer is not None:
@@ -175,6 +179,51 @@ class ParkingManager:
         # Bỏ qua xe máy, xe đạp và người đi bộ (không xét lỗi đỗ trái phép)
         if label in ["motorcycle", "bicycle", "person"]:
             return None, None
+
+        current_time = time.time()
+
+        # 1. Dọn dẹp Ghost Tracks hết hạn (> 10s)
+        expired_ghosts = [gid for gid, ginfo in self.ghost_tracks.items() if current_time - ginfo['lost_time'] > 10.0]
+        for gid in expired_ghosts:
+            del self.ghost_tracks[gid]
+
+        # 2. Phát hiện xe bị mất dấu (> 1s) và đẩy vào Ghost Tracks
+        lost_ids = [lid for lid, linfo in self.last_seen.items() if current_time - linfo['last_time'] > 1.0]
+        for lid in lost_ids:
+            self.ghost_tracks[lid] = {
+                'cx': self.last_seen[lid]['cx'],
+                'cy': self.last_seen[lid]['cy'],
+                'lost_time': current_time
+            }
+            if lid in self.logic.states:
+                self.ghost_tracks[lid]['logic_state'] = self.logic.states.pop(lid)
+            if lid in self.waiting_vehicles:
+                self.ghost_tracks[lid]['waiting_data'] = self.waiting_vehicles.pop(lid)
+            del self.last_seen[lid]
+
+        # 3. Thuật toán Spatial Re-ID (Sáp nhập Track vỡ nếu xuất hiện ID mới tại cùng vị trí)
+        if track_id not in self.last_seen:
+            best_match = None
+            min_dist = float('inf')
+            max_dist_px = max(60.0, self.move_thr_px * 2) # Khoảng cách tối đa cho phép nối ghép
+            
+            for gid, ginfo in self.ghost_tracks.items():
+                dist = math.hypot(cx - ginfo['cx'], cy - ginfo['cy'])
+                if dist < max_dist_px and dist < min_dist:
+                    min_dist = dist
+                    best_match = gid
+            
+            if best_match is not None:
+                # Nối ghép thành công! Khôi phục trí nhớ cho xe
+                ginfo = self.ghost_tracks.pop(best_match)
+                if 'logic_state' in ginfo:
+                    self.logic.states[track_id] = ginfo['logic_state']
+                if 'waiting_data' in ginfo:
+                    self.waiting_vehicles[track_id] = ginfo['waiting_data']
+                print(f"[RE-ID] Bù đắp Track vỡ: Đã nối mã gốc {best_match} vào mã mới {track_id} (Khoảng cách lệch: {min_dist:.1f}px)")
+
+        # Cập nhật vị trí và dấu thời gian hiện tại
+        self.last_seen[track_id] = {'cx': cx, 'cy': cy, 'last_time': current_time}
 
         in_no_park = False
         if self.no_park_polygon is not None:
