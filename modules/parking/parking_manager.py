@@ -119,9 +119,25 @@ class ParkingManager:
         except: pass
 
     def _save_evidence_and_notify_thread(self, track_id, data):
-        evt_id = f"EVT_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{track_id}"
-        plate_folder = data.get('plate', f"ID_{track_id}")
-        save_dir = os.path.join("logs", "violations", plate_folder, evt_id)
+        now = datetime.datetime.now()
+        year_str = now.strftime('%Y')
+        month_str = now.strftime('%m')
+        day_str = now.strftime('%d')
+        time_str = now.strftime('%H%M%S')
+        
+        evt_id = f"EVT_{time_str}"
+        raw_plate = data.get('plate', f"ID_{track_id}")
+        
+        if raw_plate.startswith("ID_"):
+            # Xe không có biển số / OCR chưa đọc được
+            plate_folder = os.path.join("UNKNOWN_PLATES", raw_plate)
+            json_plate_val = "UNKNOWN"
+        else:
+            # OCR đã đọc thành công biển số
+            plate_folder = raw_plate
+            json_plate_val = raw_plate
+        
+        save_dir = os.path.join("logs", "violations", year_str, month_str, day_str, plate_folder, evt_id)
         os.makedirs(save_dir, exist_ok=True)
         
         img_t0_path = os.path.join(save_dir, "img_T0.jpg")
@@ -142,7 +158,7 @@ class ParkingManager:
         cv2.putText(img1, "T0: Bat dau do", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         cv2.putText(img2, "T1: Vi pham", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         combined = np.vstack((img1, img2))
-        cv2.putText(combined, f"PLATE: {plate_folder}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        cv2.putText(combined, f"PLATE: {raw_plate}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
         cv2.imwrite(combined_path, combined)
         
         # Lưu video bằng chứng
@@ -157,18 +173,20 @@ class ParkingManager:
         # Lưu file Metadata JSON
         meta = {
             "track_id": track_id,
-            "plate": plate_folder,
+            "plate": json_plate_val,
             "label": data.get('label', ''),
             "start_time": data.get('start_time', datetime.datetime.now()).strftime('%Y-%m-%d %H:%M:%S'),
-            "violation_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            "violation_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "evidence_images": ["img_T0.jpg", "img_T1.jpg", "combined_alert.jpg"],
+            "evidence_video": "video_record.mp4" if data['frames'] else None
         }
         with open(json_path, 'w', encoding='utf-8') as jf:
             json.dump(meta, jf, indent=4)
             
         if self.telegram_enabled:
-            caption_img = f"🚨 VI PHẠM CHỐT: Xe {plate_folder} đỗ sai quy định."
+            caption_img = f"🚨 VI PHẠM CHỐT: Xe {raw_plate} đỗ sai quy định."
             send_telegram_image(combined_path, caption_img, self.telegram_bot_token, self.telegram_chat_id)
-            caption_vid = f"Bằng chứng Video 15s cho xe {plate_folder}"
+            caption_vid = f"Bằng chứng Video 15s cho xe {raw_plate}"
             send_telegram_video(video_path, caption_vid, self.telegram_bot_token, self.telegram_chat_id)
 
     def process_vehicle(self, frame, clean_frame, track_id, label, cx, cy, frame_count, bbox=None):
