@@ -33,6 +33,7 @@ class ParkingManager:
         self.fps = 30.0
         self.active_recordings = {}
         self.waiting_vehicles = {}
+        self.known_plates = {}
 
     def init_ui(self):
         self.frame_no_park = tk.LabelFrame(self.root, text="3. Quản lý Vùng Cấm Đỗ", font=("Arial", 11, "bold"))
@@ -94,6 +95,12 @@ class ParkingManager:
         self.waiting_vehicles = {}
         self.ghost_tracks = {}
         self.last_seen = {}
+        self.known_plates = {}
+
+    def set_plate_for_vehicle(self, track_id, plate_string):
+        self.known_plates[track_id] = plate_string
+        if track_id in self.active_recordings:
+            self.active_recordings[track_id]['plate'] = plate_string
 
     def update_buffer(self, frame_copy):
         if self.frame_buffer is not None:
@@ -278,12 +285,13 @@ class ParkingManager:
                         cv2.rectangle(img_t1, (x1, y1), (x2, y2), box_color, 4)
                         cv2.putText(img_t1, f"{label.upper()} {track_id} - VI PHAM!", (x1, max(0, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 3)
                         
+                    plate_str = self.known_plates.get(track_id, f"ID_{track_id}")
                     self.active_recordings[track_id] = {
                         'frames': list(self.frame_buffer),
                         'frames_needed': int(10 * self.fps),
                         'img_t0': img_t0,
                         'img_t1': img_t1,
-                        'plate': f"ID_{track_id}",
+                        'plate': plate_str,
                         'start_time': start_time,
                         'label': label
                     }
