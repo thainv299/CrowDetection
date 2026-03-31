@@ -7,12 +7,13 @@ from collections import Counter
 from . import ocr_processor
 
 class OCRManager:
-    def __init__(self, reader, interval=4, vote_threshold=3, max_lost_frames=5, alpr_logger=None):
+    def __init__(self, reader, interval=4, vote_threshold=3, max_lost_frames=5, alpr_logger=None, parking_manager=None):
         self.reader = reader
         self.OCR_INTERVAL = interval
         self.VOTE_THRESHOLD = vote_threshold
         self.MAX_LOST_FRAMES = max_lost_frames
         self.alpr_logger = alpr_logger
+        self.parking_manager = parking_manager
         
         self.queue = queue.Queue(maxsize=3)
         self.pending_results = {}
@@ -91,13 +92,13 @@ class OCRManager:
     def process_plate(self, frame, clean_frame, track_id, x1, y1, x2, y2, cx, cy, valid_vehicles, current_time, frame_count):
         """Xử lý lôgic chính: check spatial memory, nhận kết quả queue, gửi queue, vẽ biển số lên frame."""
         # Lọc biển số: Chỉ xử lý OCR nếu tâm biển số nằm trong ô tô/bus/truck
-        is_valid_plate = False
-        for vx1, vy1, vx2, vy2 in valid_vehicles:
+        matched_car_id = -1
+        for cid, vx1, vy1, vx2, vy2 in valid_vehicles:
             if vx1 <= cx <= vx2 and vy1 <= cy <= vy2:
-                is_valid_plate = True
+                matched_car_id = cid
                 break
         
-        if not is_valid_plate:
+        if matched_car_id == -1:
             return None
 
         self.last_seen_plate[track_id] = current_time
@@ -139,6 +140,10 @@ class OCRManager:
                     self.plate_confirmed[track_id] = best
                     display_text = f"[OK] {best}"
                     self.spatial_memory[track_id] = (cx, cy, best, frame_count)
+                    
+                    if self.parking_manager and matched_car_id != -1:
+                        self.parking_manager.set_plate_for_vehicle(matched_car_id, best)
+                        
                     if self.alpr_logger:
                         self.alpr_logger.process_plate(best, frame_count, res['img_before'], clean_frame, [x1, y1, x2, y2])
                 else:
