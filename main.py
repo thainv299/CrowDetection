@@ -203,7 +203,7 @@ class App:
         model = YOLO(self.model_path).to("cuda") if not self.model_path.endswith(".engine") else YOLO(self.model_path, task="detect")
         if self.ocr_reader is None:
             self.ocr_reader = PaddleOCR(use_angle_cls=False, det=True, lang='en', show_log=False)
-            self.ocr_manager = OCRManager(self.ocr_reader, alpr_logger=self.alpr_logger)
+            self.ocr_manager = OCRManager(self.ocr_reader, alpr_logger=self.alpr_logger, parking_manager=self.parking_manager)
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         for _ in range(5): model.predict(dummy, verbose=False)
         return model
@@ -255,7 +255,9 @@ class App:
                     for box in r.boxes:
                         tmp_label = self.model.names[int(box.cls[0])]
                         if tmp_label in ["car", "bus", "truck"]:
-                            valid_vehicles.append(tuple(map(int, box.xyxy[0])))
+                            cid = int(box.id[0]) if box.id is not None else -1
+                            vx1, vy1, vx2, vy2 = map(int, box.xyxy[0])
+                            valid_vehicles.append((cid, vx1, vy1, vx2, vy2))
 
                     for box in r.boxes:
                         cls_id = int(box.cls[0])
