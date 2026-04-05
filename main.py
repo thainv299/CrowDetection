@@ -170,7 +170,11 @@ class App:
             if event == cv2.EVENT_LBUTTONDOWN: points.append((x, y))
             elif event == cv2.EVENT_RBUTTONDOWN: points.clear()
         clone = frame.copy()
-        cv2.namedWindow(window_name)
+        h, w = frame.shape[:2]
+        disp_w = min(w, 1280)
+        disp_h = int(h * (disp_w / w))
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, disp_w, disp_h)
         cv2.setMouseCallback(window_name, mouse)
         while True:
             temp = clone.copy()
@@ -203,7 +207,7 @@ class App:
         model = YOLO(self.model_path).to("cuda") if not self.model_path.endswith(".engine") else YOLO(self.model_path, task="detect")
         if self.ocr_reader is None:
             self.ocr_reader = PaddleOCR(use_angle_cls=False, det=True, lang='en', show_log=False)
-            self.ocr_manager = OCRManager(self.ocr_reader, alpr_logger=self.alpr_logger, parking_manager=self.parking_manager)
+            self.ocr_manager = OCRManager(self.ocr_reader, alpr_logger=self.alpr_logger)
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         for _ in range(5): model.predict(dummy, verbose=False)
         return model
@@ -228,6 +232,14 @@ class App:
             ideal_frame_time = 1.0 / video_fps
 
             self.parking_manager.setup_detection(video_fps)
+
+            # Initialize resizable window to prevent overflow
+            cv2.namedWindow("Vehicle Detection", cv2.WINDOW_NORMAL)
+            orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            disp_w = min(orig_w, 1280)
+            disp_h = int(orig_h * (disp_w / orig_w)) if orig_w > 0 else 720
+            cv2.resizeWindow("Vehicle Detection", disp_w, disp_h)
 
             while cap.isOpened():
                 ret, frame = cap.read()
@@ -255,9 +267,7 @@ class App:
                     for box in r.boxes:
                         tmp_label = self.model.names[int(box.cls[0])]
                         if tmp_label in ["car", "bus", "truck"]:
-                            cid = int(box.id[0]) if box.id is not None else -1
-                            vx1, vy1, vx2, vy2 = map(int, box.xyxy[0])
-                            valid_vehicles.append((cid, vx1, vy1, vx2, vy2))
+                            valid_vehicles.append(tuple(map(int, box.xyxy[0])))
 
                     for box in r.boxes:
                         cls_id = int(box.cls[0])
