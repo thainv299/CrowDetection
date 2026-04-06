@@ -74,7 +74,7 @@ def correct_plate_format(text):
         return text
 
     dict_char_to_num = {'O': '0', 'Q': '0', 'I': '1', 'Z': '2', 'S': '5', 'G': '6', 'B': '8', 'A': '4'}
-    dict_num_to_char = {'0': 'D', '8': 'B', '4': 'A', '5': 'S', '2': 'Z'}
+    dict_num_to_char = {'0': 'D', '8': 'B', '4': 'A', '5': 'S', '2': 'Z', '6' : 'G'}
 
     text_list = list(text)
 
@@ -106,7 +106,7 @@ def run_ocr(ocr_reader, img_bgr):
     img_processed = preprocess_plate(img_plate_color)
     read_text = ""
     
-    res = ocr_reader.ocr(img_processed, cls=False)
+    res = ocr_reader.ocr(img_processed)
     
     if res and res[0]:
         lines = sorted(res[0], key=lambda x: x[0][0][1])
