@@ -266,8 +266,10 @@ class App:
                     valid_vehicles = []
                     for box in r.boxes:
                         tmp_label = self.model.names[int(box.cls[0])]
+                        track_id_veh = int(box.id[0]) if box.id is not None else -1
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
                         if tmp_label in ["car", "bus", "truck"]:
-                            valid_vehicles.append(tuple(map(int, box.xyxy[0])))
+                            valid_vehicles.append((track_id_veh, x1, y1, x2, y2))
 
                     for box in r.boxes:
                         cls_id = int(box.cls[0])
